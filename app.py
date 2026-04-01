@@ -1,0 +1,807 @@
+
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import copy
+import io
+import json
+import tempfile
+import xml.etree.ElementTree as ET
+from typing import Any, cast
+from pathlib import Path
+import zipfile
+
+import streamlit as st
+from collections import OrderedDict
+
+COPY_TAGS = {"TotalCopies"}
+
+SOURCE_PASSTHROUGH_TAGS = {
+    "Tags",
+    "SprayAmount",
+    "LinearSprayAmount",
+    "MaxOpacity",
+    "MinOpacity",
+    "ChokeWhitePixels",
+    "HighlightOpacity",
+    "PrintSpeed2",
+    "PrintDirection",
+    "IsSpray",
+    "IsWipe",
+    "Factory",
+    "Sharpen",
+    "RenderingIntent",
+    "DelaySprayToPrint",
+    "LayerDelay1to2",
+    "MaxDischarge",
+    "UseDischarge",
+    "DischargeOpacity",
+    "MinDischarge",
+    "ChokeDischargePixels",
+    "ColorKnockout",
+    "WhiteKnockout",
+}
+
+
+GEOMETRY_TAGS = {
+    "XOffsetMM",
+    "YOffsetMM",
+    "WidthMM",
+    "HeightMM",
+    "Rotate90",
+    "Rotate180",
+    "RotateSmallDegree",
+    "Mirror",
+    "XCenter",
+    "YCenter",
+    "KeepRatio",
+    "TopCrop",
+    "LeftCrop",
+    "BottomCrop",
+    "RightCrop",
+    "Strips",
+}
+
+ATLAS_SETUP_MAP = {
+    "black_std": {
+        "set_applied": "Atlas MAX+ Black STD",
+        "last_base_setup_name": "Atlas MAX+ Black STD",
+        "media_name": "Atlas MAX+ Black STD",
+        "icc_in_rgb": "RGB Color Space Profile",
+        "icc_out": "Atlas MAX+ Black STD SatRGK",
+        "rendering_intent": "Perceptual",
+    },
+    "black_high_production": {
+        "set_applied": "Atlas MAX+ Black High Production",
+        "last_base_setup_name": "Atlas MAX+ Black High Production",
+        "media_name": "Atlas MAX+ Black HP",
+        "icc_in_rgb": "RGB Color Space Profile",
+        "icc_out": "Atlas MAX+ Black High Production SatRGK",
+        "rendering_intent": "Perceptual",
+    },
+    "black_hq": {
+        "set_applied": "Atlas MAX+ Black HQ",
+        "last_base_setup_name": "Atlas MAX+ Black HQ",
+        "media_name": "Atlas MAX+ Black HQ",
+        "icc_in_rgb": "RGB Color Space Profile",
+        "icc_out": "Atlas MAX+ Black HQ SatRGK",
+        "rendering_intent": "Perceptual",
+    },
+    "light_high_production": {
+        "set_applied": "Atlas MAX+ Light High Production",
+        "last_base_setup_name": "Atlas MAX+ Light High Production",
+        "media_name": "Atlas MAX+ Light High Production",
+        "icc_in_rgb": "RGB Color Space Profile",
+        "icc_out": "Atlas MAX+ Light High Production SatRGK",
+        "rendering_intent": "Perceptual",
+    },
+}
+
+
+ROOT_ATTRS = OrderedDict([
+    ("xmlns:xsd", "http://www.w3.org/2001/XMLSchema"),
+    ("xmlns:xsi", "http://www.w3.org/2001/XMLSchema-instance"),
+])
+
+# Special separation rules block
+SPECIAL_SEPARATION_RULES = {
+    "Qc": {"solid": "25", "max_coverage": "0", "is_max_coverage": "false"},
+    "Qw": {"solid": "0", "max_coverage": "65", "is_max_coverage": "true"},
+    "Iw": {"solid": "25", "max_coverage": "0", "is_max_coverage": "false"},
+    "Ic": {"solid": "0", "max_coverage": "0", "is_max_coverage": "false"},
+}
+
+# Built-in default template path
+DEFAULT_TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
+PREFERRED_TEMPLATE_NAMES = [
+    "Test File.ksf",
+    "default_atlas_template.ksf",
+]
+DEFAULT_TEMPLATE_PATH = DEFAULT_TEMPLATE_DIR / PREFERRED_TEMPLATE_NAMES[0]
+
+
+def load_xml(path: Path) -> ET.ElementTree:
+    return cast(ET.ElementTree, ET.parse(path))
+
+# Helper to load the default template if present
+def load_default_template_bytes() -> tuple[str | None, bytes | None]:
+    if not DEFAULT_TEMPLATE_DIR.is_dir():
+        return None, None
+
+    for filename in PREFERRED_TEMPLATE_NAMES:
+        candidate = DEFAULT_TEMPLATE_DIR / filename
+        if candidate.is_file():
+            return candidate.name, candidate.read_bytes()
+
+    candidates = sorted(DEFAULT_TEMPLATE_DIR.glob("*.ksf"))
+    if not candidates:
+        return None, None
+
+    selected = candidates[0]
+    return selected.name, selected.read_bytes()
+
+
+def parse_ksf_bytes(data: bytes) -> ET.Element:
+    return cast(ET.Element, ET.fromstring(data))
+
+
+def get_text(root: ET.Element, tag: str) -> str:
+    return (root.findtext(tag) or "").strip()
+
+
+def normalize(text: str) -> str:
+    return " ".join(text.lower().replace("_", " ").replace("-", " ").split())
+
+
+def infer_atlas_setup_key(root: ET.Element) -> str | None:
+    media_name = normalize(get_text(root, "MediaName"))
+    set_applied = normalize(get_text(root, "SetApplied"))
+    last_base_setup_name = normalize(get_text(root, "LastBaseSetupName"))
+    icc_out = normalize(get_text(root, "IccOutFileName"))
+
+    primary_text = f" {media_name} {set_applied} {last_base_setup_name} {icc_out} "
+
+    if "dark" in primary_text or "black" in primary_text:
+        if "hq" in primary_text:
+            return "black_hq"
+        if "std" in primary_text or "standard" in primary_text:
+            return "black_std"
+        if any(token in primary_text for token in ["high production", "highproduction", " hp "]):
+            return "black_high_production"
+
+    if "light" in primary_text and any(
+        token in primary_text for token in ["high production", "highproduction"]
+    ):
+        return "light_high_production"
+
+    return None
+
+
+def apply_atlas_setup_mapping(target_root: ET.Element, atlas_setup_key: str | None) -> None:
+    if not atlas_setup_key:
+        return
+    mapping = ATLAS_SETUP_MAP.get(atlas_setup_key)
+    if not mapping:
+        return
+
+    replace_simple_text(target_root, "SetApplied", mapping["set_applied"])
+    replace_simple_text(target_root, "LastBaseSetupName", mapping["last_base_setup_name"])
+    replace_simple_text(target_root, "MediaName", mapping["media_name"])
+    replace_simple_text(target_root, "IccInRGBFileName", mapping["icc_in_rgb"])
+    replace_simple_text(target_root, "IccOutFileName", mapping["icc_out"])
+    replace_simple_text(target_root, "RenderingIntent", mapping["rendering_intent"])
+
+
+def detect_profile(root: ET.Element) -> dict:
+    fields = {
+        "table_name": get_text(root, "TableName"),
+        "media_name": get_text(root, "MediaName"),
+        "set_applied": get_text(root, "SetApplied"),
+        "last_base_setup_name": get_text(root, "LastBaseSetupName"),
+        "machine_type": get_text(root, "MachineType"),
+        "white_pass": get_text(root, "WhitePass"),
+        "icc_out": get_text(root, "IccOutFileName"),
+        "x_offset": get_text(root, "XOffsetMM"),
+        "y_offset": get_text(root, "YOffsetMM"),
+        "spray_amount": get_text(root, "SprayAmount"),
+        "linear_spray_amount": get_text(root, "LinearSprayAmount"),
+        "max_opacity": get_text(root, "MaxOpacity"),
+        "min_opacity": get_text(root, "MinOpacity"),
+        "choke_white_pixels": get_text(root, "ChokeWhitePixels"),
+        "highlight_opacity": get_text(root, "HighlightOpacity"),
+        "print_speed": get_text(root, "PrintSpeed"),
+        "print_speed2": get_text(root, "PrintSpeed2"),
+        "print_direction": get_text(root, "PrintDirection"),
+        "is_spray": get_text(root, "IsSpray"),
+        "is_wipe": get_text(root, "IsWipe"),
+        "factory": get_text(root, "Factory"),
+        "sharpen": get_text(root, "Sharpen"),
+        "icc_in_rgb": get_text(root, "IccInRGBFileName"),
+        "icc_in_cmyk": get_text(root, "IccInCMYKFileName"),
+        "rendering_intent": get_text(root, "RenderingIntent"),
+        "delay_spray_to_print": get_text(root, "DelaySprayToPrint"),
+        "layer_delay_1_to_2": get_text(root, "LayerDelay1to2"),
+        "layer_delay_2_to_3": get_text(root, "LayerDelay2to3"),
+        "max_discharge": get_text(root, "MaxDischarge"),
+        "use_discharge": get_text(root, "UseDischarge"),
+        "discharge_opacity": get_text(root, "DischargeOpacity"),
+        "min_discharge": get_text(root, "MinDischarge"),
+        "choke_discharge_pixels": get_text(root, "ChokeDischargePixels"),
+        "color_knockout": get_text(root, "ColorKnockout"),
+        "white_knockout": get_text(root, "WhiteKnockout"),
+        "image_position": get_text(root, "ImagePosition"),
+        "copies": get_text(root, "TotalCopies"),
+        "atlas_setup_key": infer_atlas_setup_key(root) or "",
+    }
+    haystack = normalize(
+        " ".join(
+            [
+                fields["table_name"],
+                fields["media_name"],
+                fields["set_applied"],
+                fields["last_base_setup_name"],
+            ]
+        )
+    )
+
+    detected = {
+        "shirt_family": "unknown",
+        "recommended_atlas_family": "review",
+        "warnings": [],
+    }
+
+    if any(key in haystack for key in ["black t shirt", "black tshirt", "black shirt", " black "]):
+        detected["shirt_family"] = "black"
+        detected["recommended_atlas_family"] = "black"
+        detected["warnings"].append(
+            "Source indicates a Black T-shirt. Recommendation: validate a Black setup in Atlas Max."
+        )
+    elif any(key in haystack for key in ["dark", "charcoal", "navy", "burgundy"]):
+        detected["shirt_family"] = "dark"
+        detected["recommended_atlas_family"] = "black"
+        detected["warnings"].append(
+            "Source indicates a dark garment. Recommendation: validate a Black setup in Atlas Max."
+        )
+    elif any(key in haystack for key in ["light", "white", "paper", "transparent"]):
+        detected["shirt_family"] = "light"
+        detected["recommended_atlas_family"] = "light"
+    elif any(key in haystack for key in ["color", "premium", "poly", "cotton"]):
+        detected["shirt_family"] = "color"
+        detected["recommended_atlas_family"] = "color"
+
+    if fields["machine_type"]:
+        detected["warnings"].append(f"Source file detected as {fields['machine_type']}.")
+
+    return {**fields, **detected}
+
+
+def compare_with_template(source_info: dict, template_info: dict) -> list[str]:
+    warnings = list(source_info["warnings"])
+    if not source_info.get("atlas_setup_key"):
+        warnings.append("No Atlas setup mapping could be inferred from the source file.")
+    return warnings
+
+
+
+def replace_or_append(parent: ET.Element, child: ET.Element) -> None:
+    existing = parent.find(child.tag)
+    child_copy = copy.deepcopy(child)
+    if existing is None:
+        parent.append(child_copy)
+    else:
+        index = list(parent).index(existing)
+        parent.remove(existing)
+        parent.insert(index, child_copy)
+
+
+# Only replace existing tag, do not append if missing
+def replace_existing_only(parent: ET.Element, child: ET.Element) -> None:
+    existing = parent.find(child.tag)
+    if existing is None:
+        return
+    index = list(parent).index(existing)
+    parent.remove(existing)
+    parent.insert(index, copy.deepcopy(child))
+
+
+def preserve_geometry(source_root: ET.Element, target_root: ET.Element) -> None:
+    for tag in GEOMETRY_TAGS:
+        source_node = source_root.find(tag)
+        if source_node is not None:
+            replace_existing_only(target_root, source_node)
+
+
+def preserve_copies(source_root: ET.Element, target_root: ET.Element) -> None:
+    for tag in COPY_TAGS:
+        source_node = source_root.find(tag)
+        if source_node is not None:
+            replace_existing_only(target_root, source_node)
+
+
+
+def replace_simple_text(root: ET.Element, tag: str, value: str) -> None:
+    node = root.find(tag)
+    if node is None:
+        node = ET.SubElement(root, tag)
+    node.text = value
+
+
+# Special separation rules function
+def apply_special_separation_rules(target_root: ET.Element) -> None:
+    special_separations = target_root.find("SpecialSeparations")
+    if special_separations is None:
+        return
+
+    existing_models = {
+        model.findtext("Name", default="").strip(): model
+        for model in special_separations.findall("SpecialSepModel")
+    }
+
+    for name, config in SPECIAL_SEPARATION_RULES.items():
+        model = existing_models.get(name)
+        if model is None:
+            model = ET.SubElement(special_separations, "SpecialSepModel")
+            ET.SubElement(model, "Name").text = name
+            ET.SubElement(model, "Enable").text = "true"
+            ET.SubElement(model, "MaxCoverage").text = "0"
+            ET.SubElement(model, "IsMaxCoverage").text = "false"
+            ET.SubElement(model, "Solid").text = "0"
+            ET.SubElement(model, "GradedEdgeOrStrokePixelsAmount").text = "4"
+            ET.SubElement(model, "GradedEdgeOrStrokeLevel").text = "30"
+            ET.SubElement(model, "DefaultGradedEdgeOrStrokePixelsAmount").text = "4"
+            ET.SubElement(model, "DefaultGradedEdgeOrStrokeLevel").text = "30"
+            ET.SubElement(model, "ChannelIndex").text = "0"
+
+        replace_simple_text(model, "Enable", "true")
+        replace_simple_text(model, "Solid", config["solid"])
+        replace_simple_text(model, "MaxCoverage", config["max_coverage"])
+        replace_simple_text(model, "IsMaxCoverage", config["is_max_coverage"])
+        if name == "Ic": replace_simple_text(model, "Solid", "0")
+
+
+def format_number(value: float, original_text: str | None) -> str:
+    if original_text and "." in original_text:
+        decimals = len(original_text.split(".")[-1])
+        return f"{value:.{decimals}f}".rstrip("0").rstrip(".")
+    if value.is_integer():
+        return str(int(value))
+    return f"{value:.6f}".rstrip("0").rstrip(".")
+
+
+def apply_delta_to_tag(parent: ET.Element, tag: str, delta: float) -> None:
+    node = parent.find(tag)
+    if node is None or node.text is None:
+        return
+    original = node.text.strip()
+    value = float(original)
+    node.text = format_number(value + delta, original)
+
+
+def apply_offset_delta(root: ET.Element, x_delta: float, y_delta: float) -> None:
+    if x_delta:
+        apply_delta_to_tag(root, "XOffsetMM", x_delta)
+        for strip in root.findall("./Strips/StripParam"):
+            apply_delta_to_tag(strip, "XOffsetMM", x_delta)
+    if y_delta:
+        apply_delta_to_tag(root, "YOffsetMM", y_delta)
+        for strip in root.findall("./Strips/StripParam"):
+            apply_delta_to_tag(strip, "YOffsetMM", y_delta)
+
+
+def convert_one(
+    source_path: Path,
+    template_tree: ET.ElementTree,
+    output_path: Path,
+    geometry_mode: str,
+    copies_mode: str,
+    set_name_mode: str,
+    x_delta: float,
+    y_delta: float,
+) -> None:
+    source_tree = load_xml(source_path)
+    source_root = cast(ET.Element, source_tree.getroot())
+    target_root = cast(ET.Element, copy.deepcopy(template_tree.getroot()))
+    white_support_type = target_root.attrib.get("WhiteSupportType", "WBCICC")
+    target_root.attrib.clear()
+    for key, value in ROOT_ATTRS.items():
+        target_root.set(key, value)
+    target_root.set("WhiteSupportType", white_support_type)
+
+    for tag in SOURCE_PASSTHROUGH_TAGS:
+        source_node = source_root.find(tag)
+        if source_node is not None:
+            replace_existing_only(target_root, source_node)
+
+    if geometry_mode == "source":
+        preserve_geometry(source_root, target_root)
+
+    if copies_mode == "source":
+        preserve_copies(source_root, target_root)
+    atlas_setup_key = infer_atlas_setup_key(source_root)
+    apply_atlas_setup_mapping(target_root, atlas_setup_key)
+    apply_special_separation_rules(target_root)
+
+    apply_offset_delta(target_root, x_delta, y_delta)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    xml_bytes = ET.tostring(cast(Any, target_root), encoding="utf-8")
+    xml_text = xml_bytes.decode("utf-8")
+    xml_text = '<?xml version="1.0" encoding="utf-8"?>\n' + xml_text
+    output_path.write_text(xml_text, encoding="utf-8")
+
+
+def build_preview(files: list[tuple[str, bytes]], template_name: str, template_bytes: bytes) -> dict:
+    template_root = parse_ksf_bytes(template_bytes)
+    template_info = detect_profile(template_root)
+
+    items = []
+    for filename, data in files:
+        root = parse_ksf_bytes(data)
+        source_info = detect_profile(root)
+        items.append(
+            {
+                "filename": filename,
+                "source": source_info,
+                "template": template_info,
+                "warnings": compare_with_template(source_info, template_info),
+                "recommended_setup": source_info["recommended_atlas_family"],
+            }
+        )
+
+    return {
+        "template_filename": template_name,
+        "template": template_info,
+        "items": items,
+    }
+
+
+def generate_zip(
+    source_parts: list[tuple[str, bytes]],
+    template_name: str,
+    template_bytes: bytes,
+    geometry_mode: str,
+    copies_mode: str,
+    set_name_mode: str,
+    x_delta: float,
+    y_delta: float,
+    preview: dict,
+) -> bytes:
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = Path(tmp)
+        template_path = tmpdir / template_name
+        template_path.write_bytes(template_bytes)
+        template_tree = load_xml(template_path)
+
+        out_dir = tmpdir / "converted"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        for filename, data in source_parts:
+            source_path = tmpdir / filename
+            source_path.write_bytes(data)
+            output_path = out_dir / Path(filename).name
+            convert_one(
+                source_path=source_path,
+                template_tree=template_tree,
+                output_path=output_path,
+                geometry_mode=geometry_mode,
+                copies_mode=copies_mode,
+                set_name_mode=set_name_mode,
+                x_delta=x_delta,
+                y_delta=y_delta,
+            )
+
+        report_path = out_dir / "conversion-report.json"
+        report_path.write_text(json.dumps(preview, indent=2, ensure_ascii=False), encoding="utf-8")
+
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            for path in sorted(out_dir.rglob("*")):
+                if path.is_file():
+                    zf.write(path, path.relative_to(out_dir))
+        return buffer.getvalue()
+
+
+def family_label(value: str) -> str:
+    labels = {
+        "black": "BLACK",
+        "light": "LIGHT",
+        "color": "COLOR",
+        "review": "REVIEW",
+        "unknown": "UNKNOWN",
+    }
+    return labels.get(value, value.upper())
+
+
+def render_kpis(source_parts: list[tuple[str, bytes]], template_name: str | None, preview: dict | None) -> None:
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Input", f"{len(source_parts)} file(s)")
+    with col2:
+        st.metric("Template", template_name or "None")
+    with col3:
+        warnings_count = 0 if not preview else sum(len(item["warnings"]) for item in preview["items"])
+        st.metric("Warnings", warnings_count)
+
+
+def render_preview(preview: dict) -> None:
+    st.subheader("Operational review")
+    template = preview["template"]
+    st.caption(
+        f"Atlas template: {template['media_name'] or 'N/A'} | "
+        f"Setup: {template['last_base_setup_name'] or template['set_applied'] or 'N/A'}"
+    )
+
+    priority_warnings = [
+        (item["filename"], warning)
+        for item in preview["items"]
+        for warning in item["warnings"]
+    ]
+    if priority_warnings:
+        for filename, warning in priority_warnings:
+            st.warning(f"{filename}: {warning}")
+    else:
+        st.success("No critical warnings detected in the initial analysis.")
+
+    st.subheader("Analyzed files")
+    for item in preview["items"]:
+        with st.container(border=True):
+            top_a, top_b = st.columns([2.2, 1])
+            with top_a:
+                st.markdown(f"**{item['filename']}**")
+                st.write(
+                    f"Source: `{item['source']['media_name'] or 'N/A'}`  \n"
+                    f"Source setup: `{item['source']['last_base_setup_name'] or item['source']['set_applied'] or 'N/A'}`  \n"
+                    f"Detected mapping: `{item['source']['atlas_setup_key'] or 'N/A'}`  \n"
+                    "Active mapping rules: Black + STD → Black STD | Black + High Production → Black High Production | Light + High Production → Light High Production | Black + HQ → Black HQ. Special separations in the output are forced to: Qc = 25 solid, Qw = 65 max coverage, Iw = 25 solid, Ic = 0 solid."
+                )
+            with top_b:
+                st.metric("Recommendation", family_label(item["recommended_setup"]))
+                st.caption(f"Detected family: {item['source']['shirt_family'].upper() if item['source']['shirt_family'] else 'N/A'} | Atlas mapping: {(item['source']['atlas_setup_key'] or 'N/A').upper()} | Rule set: BLACK_STD / BLACK_HP / LIGHT_HP / BLACK_HQ")
+
+            st.caption(
+                f"X: {item['source']['x_offset'] or 'N/A'} | "
+                f"Y: {item['source']['y_offset'] or 'N/A'} | "
+                f"Spray: {item['source']['spray_amount'] or 'N/A'} | "
+                f"Linear Spray: {item['source']['linear_spray_amount'] or 'N/A'} | "
+                f"MaxOpacity: {item['source']['max_opacity'] or 'N/A'} | "
+                f"MinOpacity: {item['source']['min_opacity'] or 'N/A'} | "
+                f"ChokeWhitePixels: {item['source']['choke_white_pixels'] or 'N/A'} | "
+                f"HighlightOpacity: {item['source']['highlight_opacity'] or 'N/A'} | "
+                f"PrintSpeed: {item['source']['print_speed'] or 'N/A'} | "
+                f"PrintDirection: {item['source']['print_direction'] or 'N/A'}"
+            )
+
+            if item["warnings"]:
+                for warning in item["warnings"]:
+                    st.warning(warning)
+            else:
+                st.success("Conversion ready for initial testing with preserved source coordinates and other compatible variable values.")
+
+
+def main() -> None:
+    st.set_page_config(
+        page_title="Atlas Max KSF Converter",
+        page_icon="🧩",
+        layout="wide",
+    )
+
+    st.markdown(
+        """
+        <style>
+        .stApp {
+            background:
+                radial-gradient(circle at top left, rgba(218, 196, 224, 0.45), transparent 28%),
+                radial-gradient(circle at top right, rgba(190, 220, 214, 0.42), transparent 25%),
+                linear-gradient(180deg, #f8f3ef 0%, #f5efe9 45%, #f1ebe7 100%);
+        }
+        .block-container {
+            padding-top: 1.6rem;
+            padding-bottom: 2.8rem;
+            max-width: 1220px;
+        }
+        .hero-card {
+            background: rgba(255,255,255,0.72);
+            border: 1px solid rgba(136, 109, 95, 0.14);
+            border-radius: 24px;
+            padding: 1.25rem 1.35rem;
+            box-shadow: 0 10px 30px rgba(120, 102, 92, 0.08);
+            margin-bottom: 1rem;
+            backdrop-filter: blur(6px);
+        }
+        .hero-title {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #4e4038;
+            margin-bottom: 0.2rem;
+        }
+        .hero-subtitle {
+            font-size: 1rem;
+            color: #6d5e56;
+            line-height: 1.55;
+        }
+        .section-card {
+            background: rgba(255,255,255,0.68);
+            border: 1px solid rgba(136, 109, 95, 0.12);
+            border-radius: 22px;
+            padding: 1rem 1rem 0.9rem 1rem;
+            box-shadow: 0 8px 24px rgba(120, 102, 92, 0.06);
+            margin-bottom: 1rem;
+        }
+        div[data-testid="stMetric"] {
+            background: rgba(255,255,255,0.74);
+            border: 1px solid rgba(136, 109, 95, 0.12);
+            padding: 1rem;
+            border-radius: 18px;
+            box-shadow: 0 6px 18px rgba(120, 102, 92, 0.05);
+        }
+        div[data-testid="stFileUploader"] {
+            background: rgba(255,255,255,0.52);
+            border-radius: 18px;
+            padding: 0.35rem;
+            border: 1px dashed rgba(136, 109, 95, 0.24);
+        }
+        div[data-testid="stButton"] > button, div[data-testid="stDownloadButton"] > button {
+            border-radius: 14px;
+            border: 1px solid rgba(121, 97, 86, 0.18);
+            padding-top: 0.7rem;
+            padding-bottom: 0.7rem;
+            font-weight: 600;
+            box-shadow: 0 6px 18px rgba(120, 102, 92, 0.06);
+        }
+        div[data-testid="stButton"] > button {
+            background: linear-gradient(180deg, #f5e8e4 0%, #eedfda 100%);
+            color: #4d4038;
+        }
+        div[data-testid="stDownloadButton"] > button,
+        div[data-testid="stButton"] > button[kind="primary"] {
+            background: linear-gradient(180deg, #dfeee8 0%, #d1e7df 100%);
+            color: #304740;
+        }
+        div[data-testid="stDownloadButton"] > button {
+            background: linear-gradient(180deg, #f4e4bf 0%, #e9c97a 100%);
+            color: #4f3a11;
+            border-color: rgba(135, 95, 24, 0.24);
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        """
+        <div class="hero-card">
+            <div class="hero-title">Atlas Max KSF Converter</div>
+            <div class="hero-subtitle">
+                Professional KSF conversion tool using the Atlas Max file as the structural mirror,
+                replacing only Vulcan-compatible values in matching Atlas template fields.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    geometry_mode = "source"
+    copies_mode = "source"
+    set_name_mode = "template"
+    x_delta = 0.0
+    y_delta = 0.0
+
+    default_template_name, default_template_bytes = load_default_template_bytes()
+
+    top_left, top_right = st.columns([1.5, 1])
+    with top_left:
+        st.markdown("<div class='section-card'>", unsafe_allow_html=True)
+        st.subheader("Source files")
+        st.caption("Upload one or more Vulcan KSF files to convert.")
+        source_uploads = st.file_uploader(
+            "Vulcan source KSF files",
+            type=["ksf"],
+            accept_multiple_files=True,
+            label_visibility="collapsed",
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+    with top_right:
+        st.markdown("<div class='section-card'>", unsafe_allow_html=True)
+        st.subheader("Atlas template")
+        use_default_template = st.toggle(
+            "Use built-in Atlas Max template",
+            value=default_template_bytes is not None,
+            help="If enabled, the app first looks for templates/Test File.ksf, then templates/default_atlas_template.ksf, and finally falls back to the first .ksf file found inside templates/.",
+        )
+
+        template_upload = None
+        if use_default_template:
+            if default_template_bytes is not None:
+                st.success(f"Built-in template loaded: {default_template_name}")
+            else:
+                st.warning(
+                    "Built-in template not found. Add templates/Test File.ksf, templates/default_atlas_template.ksf, place any .ksf file inside templates/, or upload a template manually."
+                )
+        else:
+            st.caption("Upload a custom Atlas Max KSF template.")
+            template_upload = st.file_uploader(
+                "Atlas Max template",
+                type=["ksf"],
+                accept_multiple_files=False,
+                label_visibility="collapsed",
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    source_parts = []
+    if source_uploads:
+        source_parts = [(uploaded.name, uploaded.getvalue()) for uploaded in source_uploads]
+
+    if use_default_template and default_template_bytes is not None:
+        template_name = default_template_name
+        template_bytes = default_template_bytes
+    else:
+        template_name = template_upload.name if template_upload else None
+        template_bytes = template_upload.getvalue() if template_upload else None
+
+    render_kpis(source_parts, template_name, st.session_state.get("preview"))
+
+    st.markdown("<div class='section-card'>", unsafe_allow_html=True)
+    st.subheader("Conversion workflow")
+    st.info(
+        "The converted file uses the Atlas Max file only as the structural mirror. The final setup, media and profiles follow these active rules: Black + STD → Black STD, Black + High Production → Black High Production, Light + High Production → Light High Production, and Black + HQ → Black HQ."
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    action_a, action_b = st.columns([1, 1.2])
+    with action_a:
+        analyze_clicked = st.button("Analyze files", use_container_width=True)
+    with action_b:
+        convert_clicked = st.button("Convert and export ZIP", type="primary", use_container_width=True)
+
+    download_placeholder = st.empty()
+
+    if analyze_clicked:
+        if not source_parts or not template_bytes:
+            st.error("Please provide at least one source file and a valid Atlas Max template.")
+        else:
+            resolved_template_name = template_name or "atlas-template.ksf"
+            st.session_state["preview"] = build_preview(
+                source_parts,
+                resolved_template_name,
+                template_bytes,
+            )
+
+    preview = st.session_state.get("preview")
+    if preview:
+        render_preview(preview)
+
+    if convert_clicked:
+        if not source_parts or not template_bytes:
+            st.error("Please provide at least one source file and a valid Atlas Max template.")
+        else:
+            resolved_template_name = template_name or "atlas-template.ksf"
+            preview = build_preview(source_parts, resolved_template_name, template_bytes)
+            st.session_state["preview"] = preview
+            zip_bytes = generate_zip(
+                source_parts=source_parts,
+                template_name=resolved_template_name,
+                template_bytes=template_bytes,
+                geometry_mode=geometry_mode,
+                copies_mode=copies_mode,
+                set_name_mode=set_name_mode,
+                x_delta=float(x_delta),
+                y_delta=float(y_delta),
+                preview=preview,
+            )
+            st.success("Conversion completed successfully.")
+            st.session_state["zip_bytes"] = zip_bytes
+
+    zip_bytes = st.session_state.get("zip_bytes")
+    if zip_bytes:
+        with download_placeholder.container():
+            st.download_button(
+                "Download atlas-max-converted.zip",
+                data=zip_bytes,
+                file_name="atlas-max-converted.zip",
+                mime="application/zip",
+                use_container_width=True,
+            )
+
+
+if __name__ == "__main__":
+    main()
