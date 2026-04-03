@@ -68,7 +68,7 @@ ATLAS_SETUP_MAP = {
         "last_base_setup_name": "Atlas MAX+ Black STD",
         "media_name": "Atlas MAX+ Black STD",
         "icc_in_rgb": "RGB Color Space Profile",
-        "icc_out": "Atlas MAX+ Black STD SatRGK.icm",
+        "icc_out": "Atlas MAX+ Black STD SatRGK",
         "rendering_intent": "Perceptual",
     },
     "black_high_production": {
@@ -76,7 +76,7 @@ ATLAS_SETUP_MAP = {
         "last_base_setup_name": "Atlas MAX+ Black High Production",
         "media_name": "Atlas MAX+ Black HP",
         "icc_in_rgb": "RGB Color Space Profile",
-        "icc_out": "Atlas MAX+ Black High Production SatRGK.icm",
+        "icc_out": "Atlas MAX+ Black High Production SatRGK",
         "rendering_intent": "Perceptual",
     },
     "black_hq": {
@@ -84,7 +84,7 @@ ATLAS_SETUP_MAP = {
         "last_base_setup_name": "Atlas MAX+ Black HQ",
         "media_name": "Atlas MAX+ Black HQ",
         "icc_in_rgb": "RGB Color Space Profile",
-        "icc_out": "Atlas MAX+ Black HQ SatRGK.icm",
+        "icc_out": "Atlas MAX+ Black HQ SatRGK",
         "rendering_intent": "Perceptual",
     },
     "light_high_production": {
@@ -92,7 +92,7 @@ ATLAS_SETUP_MAP = {
         "last_base_setup_name": "Atlas MAX+ Light High Production",
         "media_name": "Atlas MAX+ Light High Production",
         "icc_in_rgb": "RGB Color Space Profile",
-        "icc_out": "Atlas MAX+ Light High Production SatRGK.icm",
+        "icc_out": "Atlas MAX+ Light High Production SatRGK",
         "rendering_intent": "Perceptual",
     },
 }
