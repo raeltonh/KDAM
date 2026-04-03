@@ -68,7 +68,7 @@ ATLAS_SETUP_MAP = {
         "last_base_setup_name": "Atlas MAX+ Black STD",
         "media_name": "Atlas MAX+ Black STD",
         "icc_in_rgb": "RGB Color Space Profile",
-        "icc_out": "Atlas MAX+ Black STD SatRGK",
+        "icc_out": "Atlas MAX+ Black STD SatRGK.icm",
         "rendering_intent": "Perceptual",
     },
     "black_high_production": {
@@ -76,7 +76,7 @@ ATLAS_SETUP_MAP = {
         "last_base_setup_name": "Atlas MAX+ Black High Production",
         "media_name": "Atlas MAX+ Black HP",
         "icc_in_rgb": "RGB Color Space Profile",
-        "icc_out": "Atlas MAX+ Black High Production SatRGK",
+        "icc_out": "Atlas MAX+ Black High Production SatRGK.icm",
         "rendering_intent": "Perceptual",
     },
     "black_hq": {
@@ -84,7 +84,7 @@ ATLAS_SETUP_MAP = {
         "last_base_setup_name": "Atlas MAX+ Black HQ",
         "media_name": "Atlas MAX+ Black HQ",
         "icc_in_rgb": "RGB Color Space Profile",
-        "icc_out": "Atlas MAX+ Black HQ SatRGK",
+        "icc_out": "Atlas MAX+ Black HQ SatRGK.icm",
         "rendering_intent": "Perceptual",
     },
     "light_high_production": {
@@ -92,7 +92,7 @@ ATLAS_SETUP_MAP = {
         "last_base_setup_name": "Atlas MAX+ Light High Production",
         "media_name": "Atlas MAX+ Light High Production",
         "icc_in_rgb": "RGB Color Space Profile",
-        "icc_out": "Atlas MAX+ Light High Production SatRGK",
+        "icc_out": "Atlas MAX+ Light High Production SatRGK.icm",
         "rendering_intent": "Perceptual",
     },
 }
@@ -108,7 +108,7 @@ SPECIAL_SEPARATION_RULES = {
     "Qc": {"solid": "25", "max_coverage": "0", "is_max_coverage": "false"},
     "Qw": {"solid": "0", "max_coverage": "65", "is_max_coverage": "true"},
     "Iw": {"solid": "25", "max_coverage": "0", "is_max_coverage": "false"},
-    "Ic": {"solid": "0", "max_coverage": "0", "is_max_coverage": "false"},
+    "Ic": {"solid": "25", "max_coverage": "0", "is_max_coverage": "false"},
 }
 
 # Built-in default template path
@@ -356,7 +356,6 @@ def apply_special_separation_rules(target_root: ET.Element) -> None:
         replace_simple_text(model, "Solid", config["solid"])
         replace_simple_text(model, "MaxCoverage", config["max_coverage"])
         replace_simple_text(model, "IsMaxCoverage", config["is_max_coverage"])
-        if name == "Ic": replace_simple_text(model, "Solid", "0")
 
 
 def format_number(value: float, original_text: str | None) -> str:
@@ -552,7 +551,7 @@ def render_preview(preview: dict) -> None:
                     f"Source: `{item['source']['media_name'] or 'N/A'}`  \n"
                     f"Source setup: `{item['source']['last_base_setup_name'] or item['source']['set_applied'] or 'N/A'}`  \n"
                     f"Detected mapping: `{item['source']['atlas_setup_key'] or 'N/A'}`  \n"
-                    "Active mapping rules: Black + STD → Black STD | Black + High Production → Black High Production | Light + High Production → Light High Production | Black + HQ → Black HQ. Special separations in the output are forced to: Qc = 25 solid, Qw = 65 max coverage, Iw = 25 solid, Ic = 0 solid."
+                    "Active mapping rules: Black + STD → Black STD | Black + High Production → Black High Production | Light + High Production → Light High Production | Black + HQ → Black HQ. Special separations in the output are forced to: Qc = 25 solid, Qw = 65 max coverage, Iw = 25 solid, Ic = 25 solid."
                 )
             with top_b:
                 st.metric("Recommendation", family_label(item["recommended_setup"]))
