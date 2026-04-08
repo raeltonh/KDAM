@@ -18,11 +18,28 @@ http://localhost:8501
 O app permite:
 
 - carregar um ou varios `.ksf` de origem,
+- carregar um ou mais `.zip` de origem,
+- ler `.ksf` recursivamente dentro de ZIP,
 - carregar um `.ksf` Atlas Max como template,
 - converter em lote,
+- gerar relatorio por arquivo,
 - baixar um `.zip` com os arquivos convertidos,
+- baixar os `.ksf` convertidos individualmente,
 - exibir recomendacoes operacionais com base no conteudo do `.ksf`,
 - avisar quando a origem indicar `Black T'shirt` e recomendar `Black setup` na Atlas Max.
+
+## Modos de entrada e entrega
+
+Entrada:
+
+- `Arquivo individual`: upload manual de um ou varios `.ksf`
+- `ZIP`: upload de um ou mais `.zip` com busca recursiva por `.ksf`
+- `Misto`: combinacao dos dois modos
+
+Entrega:
+
+- `ZIP`: empacota os arquivos convertidos preservando a estrutura relativa e inclui `conversion-report.json`
+- `Individual files`: gera cada `.ksf` convertido separadamente no app, com download individual e relatorio JSON separado
 
 ## Regra fixa do app
 

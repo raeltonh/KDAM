@@ -5,11 +5,11 @@ from __future__ import annotations
 import copy
 import io
 import json
-import tempfile
 import xml.etree.ElementTree as ET
 from typing import Any, cast
 from pathlib import Path
 import zipfile
+from dataclasses import dataclass
 
 import streamlit as st
 from collections import OrderedDict
@@ -120,8 +120,67 @@ PREFERRED_TEMPLATE_NAMES = [
 DEFAULT_TEMPLATE_PATH = DEFAULT_TEMPLATE_DIR / PREFERRED_TEMPLATE_NAMES[0]
 
 
+@dataclass
+class SourceItem:
+    relative_path: Path
+    data: bytes
+    origin: str
+
+
+@dataclass
+class ConvertedItem:
+    relative_path: Path
+    output_path: Path
+    data: bytes | None
+    status: str
+    error: str | None
+
+
 def load_xml(path: Path) -> ET.ElementTree:
     return cast(ET.ElementTree, ET.parse(path))
+
+
+def dedupe_relative_path(relative_path: Path, used_paths: set[Path]) -> Path:
+    candidate = relative_path
+    counter = 2
+    while candidate in used_paths:
+        candidate = relative_path.with_name(f"{relative_path.stem}_{counter}{relative_path.suffix}")
+        counter += 1
+    used_paths.add(candidate)
+    return candidate
+
+
+def collect_source_items(
+    file_uploads: list[Any] | None,
+    zip_uploads: list[Any] | None,
+) -> list[SourceItem]:
+    items: list[SourceItem] = []
+    used_paths: set[Path] = set()
+
+    for uploaded in file_uploads or []:
+        relative_path = dedupe_relative_path(Path(Path(uploaded.name).name), used_paths)
+        items.append(SourceItem(relative_path=relative_path, data=uploaded.getvalue(), origin="file"))
+
+    for uploaded in zip_uploads or []:
+        zip_root = Path(uploaded.name).stem
+        with zipfile.ZipFile(io.BytesIO(uploaded.getvalue())) as archive:
+            for member in sorted(archive.infolist(), key=lambda info: info.filename):
+                member_path = Path(member.filename)
+                if member.is_dir() or member_path.suffix.lower() != ".ksf":
+                    continue
+                safe_parts = [part for part in member_path.parts if part not in {"", ".", ".."}]
+                if not safe_parts:
+                    continue
+                relative_path = dedupe_relative_path(Path(zip_root, *safe_parts), used_paths)
+                items.append(
+                    SourceItem(
+                        relative_path=relative_path,
+                        data=archive.read(member.filename),
+                        origin="zip",
+                    )
+                )
+
+    return items
 
 # Helper to load the default template if present
 def load_default_template_bytes() -> tuple[str | None, bytes | None]:
@@ -387,18 +446,16 @@ def apply_offset_delta(root: ET.Element, x_delta: float, y_delta: float) -> None
             apply_delta_to_tag(strip, "YOffsetMM", y_delta)
 
 
-def convert_one(
-    source_path: Path,
+def build_converted_root(
+    source_root: ET.Element,
     template_tree: ET.ElementTree,
-    output_path: Path,
     geometry_mode: str,
     copies_mode: str,
     set_name_mode: str,
+    output_stem: str,
     x_delta: float,
     y_delta: float,
-) -> None:
-    source_tree = load_xml(source_path)
-    source_root = cast(ET.Element, source_tree.getroot())
+) -> ET.Element:
     target_root = cast(ET.Element, copy.deepcopy(template_tree.getroot()))
     white_support_type = target_root.attrib.get("WhiteSupportType", "WBCICC")
     target_root.attrib.clear()
@@ -416,36 +473,86 @@ def convert_one(
 
     if copies_mode == "source":
         preserve_copies(source_root, target_root)
+
     atlas_setup_key = infer_atlas_setup_key(source_root)
     apply_atlas_setup_mapping(target_root, atlas_setup_key)
     apply_special_separation_rules(target_root)
 
+    if set_name_mode == "source-file":
+        replace_simple_text(target_root, "SetApplied", output_stem)
+
     apply_offset_delta(target_root, x_delta, y_delta)
+    return target_root
+
+
+def serialize_xml(root: ET.Element) -> bytes:
+    xml_bytes = ET.tostring(cast(Any, root), encoding="utf-8")
+    xml_text = '<?xml version="1.0" encoding="utf-8"?>\n' + xml_bytes.decode("utf-8")
+    return xml_text.encode("utf-8")
+
+
+def convert_one(
+    source_path: Path,
+    template_tree: ET.ElementTree,
+    output_path: Path,
+    geometry_mode: str,
+    copies_mode: str,
+    set_name_mode: str,
+    x_delta: float,
+    y_delta: float,
+) -> None:
+    source_tree = load_xml(source_path)
+    source_root = cast(ET.Element, source_tree.getroot())
+    target_root = build_converted_root(
+        source_root=source_root,
+        template_tree=template_tree,
+        geometry_mode=geometry_mode,
+        copies_mode=copies_mode,
+        set_name_mode=set_name_mode,
+        output_stem=output_path.stem,
+        x_delta=x_delta,
+        y_delta=y_delta,
+    )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    xml_bytes = ET.tostring(cast(Any, target_root), encoding="utf-8")
-    xml_text = xml_bytes.decode("utf-8")
-    xml_text = '<?xml version="1.0" encoding="utf-8"?>\n' + xml_text
-    output_path.write_text(xml_text, encoding="utf-8")
+    output_path.write_bytes(serialize_xml(target_root))
 
 
-def build_preview(files: list[tuple[str, bytes]], template_name: str, template_bytes: bytes) -> dict:
+def build_preview(files: list[SourceItem], template_name: str, template_bytes: bytes) -> dict:
     template_root = parse_ksf_bytes(template_bytes)
     template_info = detect_profile(template_root)
 
     items = []
-    for filename, data in files:
-        root = parse_ksf_bytes(data)
-        source_info = detect_profile(root)
-        items.append(
-            {
-                "filename": filename,
-                "source": source_info,
-                "template": template_info,
-                "warnings": compare_with_template(source_info, template_info),
-                "recommended_setup": source_info["recommended_atlas_family"],
-            }
-        )
+    for item in files:
+        filename = item.relative_path.as_posix()
+        try:
+            root = parse_ksf_bytes(item.data)
+            source_info = detect_profile(root)
+            items.append(
+                {
+                    "filename": filename,
+                    "origin": item.origin,
+                    "status": "ready",
+                    "source": source_info,
+                    "template": template_info,
+                    "warnings": compare_with_template(source_info, template_info),
+                    "recommended_setup": source_info["recommended_atlas_family"],
+                    "error": None,
+                }
+            )
+        except ET.ParseError as exc:
+            items.append(
+                {
+                    "filename": filename,
+                    "origin": item.origin,
+                    "status": "error",
+                    "source": None,
+                    "template": template_info,
+                    "warnings": [],
+                    "recommended_setup": "review",
+                    "error": f"Invalid XML in source file: {exc}",
+                }
+            )
 
     return {
         "template_filename": template_name,
@@ -454,50 +561,86 @@ def build_preview(files: list[tuple[str, bytes]], template_name: str, template_b
     }
 
 
-def generate_zip(
-    source_parts: list[tuple[str, bytes]],
-    template_name: str,
+def convert_sources(
+    source_parts: list[SourceItem],
     template_bytes: bytes,
     geometry_mode: str,
     copies_mode: str,
     set_name_mode: str,
     x_delta: float,
     y_delta: float,
-    preview: dict,
-) -> bytes:
-    with tempfile.TemporaryDirectory() as tmp:
-        tmpdir = Path(tmp)
-        template_path = tmpdir / template_name
-        template_path.write_bytes(template_bytes)
-        template_tree = load_xml(template_path)
+) -> list[ConvertedItem]:
+    template_root = parse_ksf_bytes(template_bytes)
+    template_tree = ET.ElementTree(template_root)
+    results: list[ConvertedItem] = []
 
-        out_dir = tmpdir / "converted"
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        for filename, data in source_parts:
-            source_path = tmpdir / filename
-            source_path.write_bytes(data)
-            output_path = out_dir / Path(filename).name
-            convert_one(
-                source_path=source_path,
+    for source in source_parts:
+        output_path = Path("converted") / source.relative_path
+        try:
+            source_root = parse_ksf_bytes(source.data)
+            converted_root = build_converted_root(
+                source_root=source_root,
                 template_tree=template_tree,
-                output_path=output_path,
                 geometry_mode=geometry_mode,
                 copies_mode=copies_mode,
                 set_name_mode=set_name_mode,
+                output_stem=output_path.stem,
                 x_delta=x_delta,
                 y_delta=y_delta,
             )
+            results.append(
+                ConvertedItem(
+                    relative_path=source.relative_path,
+                    output_path=output_path,
+                    data=serialize_xml(converted_root),
+                    status="converted",
+                    error=None,
+                )
+            )
+        except Exception as exc:
+            results.append(
+                ConvertedItem(
+                    relative_path=source.relative_path,
+                    output_path=output_path,
+                    data=None,
+                    status="error",
+                    error=str(exc),
+                )
+            )
 
-        report_path = out_dir / "conversion-report.json"
-        report_path.write_text(json.dumps(preview, indent=2, ensure_ascii=False), encoding="utf-8")
+    return results
 
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-            for path in sorted(out_dir.rglob("*")):
-                if path.is_file():
-                    zf.write(path, path.relative_to(out_dir))
-        return buffer.getvalue()
+
+def build_conversion_report(preview: dict, converted_items: list[ConvertedItem]) -> dict:
+    status_map = {item.relative_path.as_posix(): item for item in converted_items}
+    report_items = []
+    for preview_item in preview["items"]:
+        converted_item = status_map.get(preview_item["filename"])
+        report_items.append(
+            {
+                **preview_item,
+                "conversion_status": converted_item.status if converted_item else "not-run",
+                "output_filename": converted_item.output_path.as_posix() if converted_item else None,
+                "conversion_error": converted_item.error if converted_item else None,
+            }
+        )
+
+    return {
+        "template_filename": preview["template_filename"],
+        "template": preview["template"],
+        "items": report_items,
+    }
+
+
+def generate_zip_bundle(converted_items: list[ConvertedItem], report: dict) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for item in converted_items:
+            if item.data is None:
+                continue
+            zf.writestr(item.output_path.as_posix(), item.data)
+        zf.writestr("converted/conversion-report.json", json.dumps(report, indent=2, ensure_ascii=False))
+    return buffer.getvalue()
 
 
 def family_label(value: str) -> str:
@@ -511,15 +654,19 @@ def family_label(value: str) -> str:
     return labels.get(value, value.upper())
 
 
-def render_kpis(source_parts: list[tuple[str, bytes]], template_name: str | None, preview: dict | None) -> None:
+def render_kpis(source_parts: list[SourceItem], template_name: str | None, preview: dict | None) -> None:
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Input", f"{len(source_parts)} file(s)")
     with col2:
         st.metric("Template", template_name or "None")
     with col3:
-        warnings_count = 0 if not preview else sum(len(item["warnings"]) for item in preview["items"])
-        st.metric("Warnings", warnings_count)
+        if not preview:
+            st.metric("Warnings", 0)
+        else:
+            warnings_count = sum(len(item["warnings"]) for item in preview["items"])
+            invalid_count = sum(1 for item in preview["items"] if item["status"] == "error")
+            st.metric("Warnings", warnings_count + invalid_count)
 
 
 def render_preview(preview: dict) -> None:
@@ -547,6 +694,10 @@ def render_preview(preview: dict) -> None:
             top_a, top_b = st.columns([2.2, 1])
             with top_a:
                 st.markdown(f"**{item['filename']}**")
+                st.caption(f"Input mode: {item['origin'].upper()}")
+                if item["status"] == "error":
+                    st.error(item["error"])
+                    continue
                 st.write(
                     f"Source: `{item['source']['media_name'] or 'N/A'}`  \n"
                     f"Source setup: `{item['source']['last_base_setup_name'] or item['source']['set_applied'] or 'N/A'}`  \n"
@@ -575,6 +726,38 @@ def render_preview(preview: dict) -> None:
                     st.warning(warning)
             else:
                 st.success("Conversion ready for initial testing with preserved source coordinates and other compatible variable values.")
+
+
+def render_conversion_results(converted_items: list[ConvertedItem], report: dict) -> None:
+    st.subheader("Conversion output")
+    success_count = sum(1 for item in converted_items if item.status == "converted")
+    error_count = sum(1 for item in converted_items if item.status == "error")
+    st.caption(f"Converted: {success_count} | Failed: {error_count}")
+
+    report_bytes = json.dumps(report, indent=2, ensure_ascii=False).encode("utf-8")
+    st.download_button(
+        "Download conversion-report.json",
+        data=report_bytes,
+        file_name="conversion-report.json",
+        mime="application/json",
+        use_container_width=True,
+    )
+
+    for item in converted_items:
+        with st.container(border=True):
+            st.markdown(f"**{item.relative_path.as_posix()}**")
+            if item.status == "converted" and item.data is not None:
+                st.success(f"Generated: {item.output_path.as_posix()}")
+                st.download_button(
+                    f"Download {item.output_path.name}",
+                    data=item.data,
+                    file_name=item.output_path.name,
+                    mime="application/xml",
+                    key=f"download-{item.output_path.as_posix()}",
+                    use_container_width=True,
+                )
+            else:
+                st.error(item.error or "Conversion failed.")
 
 
 def main() -> None:
@@ -691,13 +874,31 @@ def main() -> None:
     with top_left:
         st.markdown("<div class='section-card'>", unsafe_allow_html=True)
         st.subheader("Source files")
-        st.caption("Upload one or more Vulcan KSF files to convert.")
-        source_uploads = st.file_uploader(
-            "Vulcan source KSF files",
-            type=["ksf"],
-            accept_multiple_files=True,
-            label_visibility="collapsed",
+        input_mode = st.radio(
+            "Input mode",
+            options=["Arquivo individual", "ZIP", "Misto"],
+            horizontal=True,
         )
+        source_uploads = None
+        zip_uploads = None
+        if input_mode in {"Arquivo individual", "Misto"}:
+            st.caption("Upload one or more Vulcan KSF files to convert.")
+            source_uploads = st.file_uploader(
+                "Vulcan source KSF files",
+                type=["ksf"],
+                accept_multiple_files=True,
+                label_visibility="collapsed",
+                key="source-ksf-uploader",
+            )
+        if input_mode in {"ZIP", "Misto"}:
+            st.caption("Upload one or more ZIP files. The app scans recursively for `.ksf` files.")
+            zip_uploads = st.file_uploader(
+                "ZIP source packages",
+                type=["zip"],
+                accept_multiple_files=True,
+                label_visibility="collapsed",
+                key="source-zip-uploader",
+            )
         st.markdown("</div>", unsafe_allow_html=True)
     with top_right:
         st.markdown("<div class='section-card'>", unsafe_allow_html=True)
@@ -726,9 +927,12 @@ def main() -> None:
             )
         st.markdown("</div>", unsafe_allow_html=True)
 
-    source_parts = []
-    if source_uploads:
-        source_parts = [(uploaded.name, uploaded.getvalue()) for uploaded in source_uploads]
+    source_parts: list[SourceItem] = []
+    source_error: str | None = None
+    try:
+        source_parts = collect_source_items(source_uploads, zip_uploads)
+    except zipfile.BadZipFile:
+        source_error = "One of the uploaded ZIP files is invalid or corrupted."
 
     if use_default_template and default_template_bytes is not None:
         template_name = default_template_name
@@ -744,15 +948,23 @@ def main() -> None:
     st.info(
         "The converted file uses the Atlas Max file only as the structural mirror. The final setup, media and profiles follow these active rules: Black + STD → Black STD, Black + High Production → Black High Production, Light + High Production → Light High Production, and Black + HQ → Black HQ."
     )
+    delivery_mode = st.radio(
+        "Delivery mode",
+        options=["ZIP", "Individual files"],
+        horizontal=True,
+        help="ZIP generates a single package with the converted structure. Individual files generates one download per converted KSF plus the JSON report.",
+    )
     st.markdown("</div>", unsafe_allow_html=True)
 
     action_a, action_b = st.columns([1, 1.2])
     with action_a:
         analyze_clicked = st.button("Analyze files", use_container_width=True)
     with action_b:
-        convert_clicked = st.button("Convert and export ZIP", type="primary", use_container_width=True)
+        convert_label = "Convert and export ZIP" if delivery_mode == "ZIP" else "Convert and generate individual files"
+        convert_clicked = st.button(convert_label, type="primary", use_container_width=True)
 
-    download_placeholder = st.empty()
+    if source_error:
+        st.error(source_error)
 
     if analyze_clicked:
         if not source_parts or not template_bytes:
@@ -776,30 +988,43 @@ def main() -> None:
             resolved_template_name = template_name or "atlas-template.ksf"
             preview = build_preview(source_parts, resolved_template_name, template_bytes)
             st.session_state["preview"] = preview
-            zip_bytes = generate_zip(
+            converted_items = convert_sources(
                 source_parts=source_parts,
-                template_name=resolved_template_name,
                 template_bytes=template_bytes,
                 geometry_mode=geometry_mode,
                 copies_mode=copies_mode,
                 set_name_mode=set_name_mode,
                 x_delta=float(x_delta),
                 y_delta=float(y_delta),
-                preview=preview,
             )
-            st.success("Conversion completed successfully.")
-            st.session_state["zip_bytes"] = zip_bytes
+            report = build_conversion_report(preview, converted_items)
+            st.session_state["converted_items"] = converted_items
+            st.session_state["conversion_report"] = report
+            if delivery_mode == "ZIP":
+                st.session_state["zip_bytes"] = generate_zip_bundle(converted_items, report)
+            else:
+                st.session_state["zip_bytes"] = None
+            success_count = sum(1 for item in converted_items if item.status == "converted")
+            error_count = sum(1 for item in converted_items if item.status == "error")
+            if success_count:
+                st.success(f"Conversion completed. Success: {success_count} | Failed: {error_count}")
+            else:
+                st.error("No files were converted successfully.")
 
     zip_bytes = st.session_state.get("zip_bytes")
     if zip_bytes:
-        with download_placeholder.container():
-            st.download_button(
-                "Download atlas-max-converted.zip",
-                data=zip_bytes,
-                file_name="atlas-max-converted.zip",
-                mime="application/zip",
-                use_container_width=True,
-            )
+        st.download_button(
+            "Download atlas-max-converted.zip",
+            data=zip_bytes,
+            file_name="atlas-max-converted.zip",
+            mime="application/zip",
+            use_container_width=True,
+        )
+
+    converted_items = st.session_state.get("converted_items")
+    report = st.session_state.get("conversion_report")
+    if converted_items and report:
+        render_conversion_results(converted_items, report)
 
 
 if __name__ == "__main__":
