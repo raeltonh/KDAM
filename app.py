@@ -140,6 +140,17 @@ def load_xml(path: Path) -> ET.ElementTree:
     return cast(ET.ElementTree, ET.parse(path))
 
 
+def safe_rerun() -> None:
+    rerun = getattr(st, "rerun", None)
+    if callable(rerun):
+        rerun()
+        return
+
+    experimental_rerun = getattr(st, "experimental_rerun", None)
+    if callable(experimental_rerun):
+        experimental_rerun()
+
+
 def dedupe_relative_path(relative_path: Path, used_paths: set[Path]) -> Path:
     candidate = relative_path
     counter = 2
@@ -771,10 +782,13 @@ def main() -> None:
         """
         <style>
         .stApp {
+            color: #2f3447;
             background:
-                radial-gradient(circle at top left, rgba(218, 196, 224, 0.45), transparent 28%),
-                radial-gradient(circle at top right, rgba(190, 220, 214, 0.42), transparent 25%),
-                linear-gradient(180deg, #f8f3ef 0%, #f5efe9 45%, #f1ebe7 100%);
+                radial-gradient(circle at 12% 18%, rgba(255, 184, 168, 0.34), transparent 26%),
+                radial-gradient(circle at 88% 14%, rgba(153, 215, 209, 0.30), transparent 24%),
+                radial-gradient(circle at 78% 78%, rgba(253, 221, 146, 0.26), transparent 24%),
+                radial-gradient(circle at 20% 82%, rgba(196, 214, 169, 0.24), transparent 22%),
+                linear-gradient(180deg, #fffaf5 0%, #fdf7f0 48%, #f8f3ee 100%);
         }
         .block-container {
             padding-top: 1.6rem;
@@ -782,67 +796,113 @@ def main() -> None:
             max-width: 1220px;
         }
         .hero-card {
-            background: rgba(255,255,255,0.72);
-            border: 1px solid rgba(136, 109, 95, 0.14);
+            background:
+                linear-gradient(135deg, rgba(255, 255, 255, 0.92) 0%, rgba(255, 247, 240, 0.88) 52%, rgba(239, 248, 245, 0.82) 100%);
+            border: 1px solid rgba(112, 126, 154, 0.16);
             border-radius: 24px;
-            padding: 1.25rem 1.35rem;
-            box-shadow: 0 10px 30px rgba(120, 102, 92, 0.08);
+            padding: 1.35rem 1.45rem;
+            box-shadow: 0 18px 42px rgba(88, 97, 129, 0.10);
             margin-bottom: 1rem;
-            backdrop-filter: blur(6px);
+            backdrop-filter: blur(10px);
         }
         .hero-title {
             font-size: 2rem;
             font-weight: 700;
-            color: #4e4038;
+            color: #31374a;
             margin-bottom: 0.2rem;
+            letter-spacing: -0.03em;
         }
         .hero-subtitle {
             font-size: 1rem;
-            color: #6d5e56;
+            color: #5d667f;
             line-height: 1.55;
         }
         .section-card {
-            background: rgba(255,255,255,0.68);
-            border: 1px solid rgba(136, 109, 95, 0.12);
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.90) 0%, rgba(255, 251, 247, 0.78) 100%);
+            border: 1px solid rgba(116, 133, 160, 0.14);
             border-radius: 22px;
             padding: 1rem 1rem 0.9rem 1rem;
-            box-shadow: 0 8px 24px rgba(120, 102, 92, 0.06);
+            box-shadow: 0 14px 34px rgba(95, 106, 138, 0.08);
             margin-bottom: 1rem;
+            backdrop-filter: blur(8px);
         }
         div[data-testid="stMetric"] {
-            background: rgba(255,255,255,0.74);
-            border: 1px solid rgba(136, 109, 95, 0.12);
+            background:
+                linear-gradient(160deg, rgba(255, 241, 234, 0.92) 0%, rgba(239, 248, 245, 0.92) 100%);
+            border: 1px solid rgba(118, 134, 161, 0.14);
             padding: 1rem;
             border-radius: 18px;
-            box-shadow: 0 6px 18px rgba(120, 102, 92, 0.05);
+            box-shadow: 0 12px 28px rgba(90, 101, 132, 0.08);
         }
         div[data-testid="stFileUploader"] {
-            background: rgba(255,255,255,0.52);
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.82) 0%, rgba(250, 246, 242, 0.72) 100%);
             border-radius: 18px;
-            padding: 0.35rem;
-            border: 1px dashed rgba(136, 109, 95, 0.24);
+            padding: 0.45rem;
+            border: 1px dashed rgba(109, 126, 154, 0.28);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+        }
+        div[data-testid="stFileUploader"] section {
+            background: transparent;
+        }
+        div[data-baseweb="radio"] > div {
+            gap: 0.7rem;
+        }
+        div[data-baseweb="radio"] label {
+            background: rgba(255, 255, 255, 0.52);
+            border: 1px solid rgba(118, 134, 161, 0.16);
+            border-radius: 999px;
+            padding: 0.28rem 0.8rem 0.28rem 0.22rem;
+            box-shadow: 0 8px 18px rgba(94, 106, 136, 0.05);
+        }
+        div[data-baseweb="radio"] label:hover {
+            background: rgba(255, 249, 244, 0.8);
         }
         div[data-testid="stButton"] > button, div[data-testid="stDownloadButton"] > button {
             border-radius: 14px;
-            border: 1px solid rgba(121, 97, 86, 0.18);
+            border: 1px solid rgba(103, 121, 149, 0.18);
             padding-top: 0.7rem;
             padding-bottom: 0.7rem;
             font-weight: 600;
-            box-shadow: 0 6px 18px rgba(120, 102, 92, 0.06);
+            box-shadow: 0 12px 24px rgba(93, 104, 134, 0.10);
+            transition: transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
         }
         div[data-testid="stButton"] > button {
-            background: linear-gradient(180deg, #f5e8e4 0%, #eedfda 100%);
-            color: #4d4038;
+            background: linear-gradient(180deg, #ffd9cb 0%, #f8c8b8 100%);
+            color: #5b3d44;
         }
         div[data-testid="stDownloadButton"] > button,
         div[data-testid="stButton"] > button[kind="primary"] {
-            background: linear-gradient(180deg, #dfeee8 0%, #d1e7df 100%);
-            color: #304740;
+            background: linear-gradient(180deg, #bfe8df 0%, #9fd9cf 100%);
+            color: #214b4c;
         }
         div[data-testid="stDownloadButton"] > button {
-            background: linear-gradient(180deg, #f4e4bf 0%, #e9c97a 100%);
-            color: #4f3a11;
-            border-color: rgba(135, 95, 24, 0.24);
+            background: linear-gradient(180deg, #ffe6a8 0%, #f3d37a 100%);
+            color: #584719;
+            border-color: rgba(158, 128, 52, 0.22);
+        }
+        div[data-testid="stButton"] > button:hover,
+        div[data-testid="stDownloadButton"] > button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 16px 28px rgba(93, 104, 134, 0.14);
+            filter: saturate(1.03);
+        }
+        h1, h2, h3, .stSubheader {
+            color: #31374a;
+            letter-spacing: -0.02em;
+        }
+        p, label, .stCaption, .stMarkdown, .stText {
+            color: #59637b;
+        }
+        div[data-testid="stAlert"] {
+            border-radius: 18px;
+            border-width: 1px;
+            box-shadow: 0 12px 24px rgba(95, 106, 138, 0.05);
+        }
+        div[data-testid="stExpander"] {
+            border-radius: 20px;
+            overflow: hidden;
         }
         </style>
         """,
@@ -869,6 +929,7 @@ def main() -> None:
     y_delta = 0.0
 
     default_template_name, default_template_bytes = load_default_template_bytes()
+    uploader_nonce = st.session_state.setdefault("uploader_nonce", 0)
 
     top_left, top_right = st.columns([1.5, 1])
     with top_left:
@@ -876,28 +937,33 @@ def main() -> None:
         st.subheader("Source files")
         input_mode = st.radio(
             "Input mode",
-            options=["Arquivo individual", "ZIP", "Misto"],
+            options=["Single files", "ZIP", "Mixed"],
             horizontal=True,
+        )
+        st.caption(
+            "Single files: upload one or more `.ksf` files directly. "
+            "ZIP: upload a `.zip` and scan all `.ksf` files inside it recursively. "
+            "Mixed: combine direct `.ksf` uploads with `.zip` packages in the same batch."
         )
         source_uploads = None
         zip_uploads = None
-        if input_mode in {"Arquivo individual", "Misto"}:
+        if input_mode in {"Single files", "Mixed"}:
             st.caption("Upload one or more Vulcan KSF files to convert.")
             source_uploads = st.file_uploader(
                 "Vulcan source KSF files",
                 type=["ksf"],
                 accept_multiple_files=True,
                 label_visibility="collapsed",
-                key="source-ksf-uploader",
+                key=f"source-ksf-uploader-{uploader_nonce}",
             )
-        if input_mode in {"ZIP", "Misto"}:
+        if input_mode in {"ZIP", "Mixed"}:
             st.caption("Upload one or more ZIP files. The app scans recursively for `.ksf` files.")
             zip_uploads = st.file_uploader(
                 "ZIP source packages",
                 type=["zip"],
                 accept_multiple_files=True,
                 label_visibility="collapsed",
-                key="source-zip-uploader",
+                key=f"source-zip-uploader-{uploader_nonce}",
             )
         st.markdown("</div>", unsafe_allow_html=True)
     with top_right:
@@ -924,6 +990,7 @@ def main() -> None:
                 type=["ksf"],
                 accept_multiple_files=False,
                 label_visibility="collapsed",
+                key=f"template-uploader-{uploader_nonce}",
             )
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -956,12 +1023,20 @@ def main() -> None:
     )
     st.markdown("</div>", unsafe_allow_html=True)
 
-    action_a, action_b = st.columns([1, 1.2])
+    action_a, action_b, action_c = st.columns([1, 1.2, 0.8])
     with action_a:
         analyze_clicked = st.button("Analyze files", use_container_width=True)
     with action_b:
         convert_label = "Convert and export ZIP" if delivery_mode == "ZIP" else "Convert and generate individual files"
         convert_clicked = st.button(convert_label, type="primary", use_container_width=True)
+    with action_c:
+        clear_clicked = st.button("Clear", use_container_width=True)
+
+    if clear_clicked:
+        for key in ["preview", "converted_items", "conversion_report", "zip_bytes"]:
+            st.session_state.pop(key, None)
+        st.session_state["uploader_nonce"] = uploader_nonce + 1
+        safe_rerun()
 
     if source_error:
         st.error(source_error)
