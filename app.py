@@ -193,6 +193,27 @@ def collect_source_items(
 
     return items
 
+
+def detect_missing_source_error(
+    file_uploads: list[Any] | None,
+    zip_uploads: list[Any] | None,
+    source_parts: list[SourceItem],
+) -> str | None:
+    if source_parts:
+        return None
+
+    if file_uploads:
+        return "The uploaded source files could not be processed. Only `.ksf` files are supported."
+
+    if zip_uploads:
+        return (
+            "No `.ksf` files were found inside the uploaded ZIP package(s). "
+            "This converter ignores other formats such as `.kst`, `.xml`, `.lut`, and `.icc`."
+        )
+
+    return None
+
+
 # Helper to load the default template if present
 def load_default_template_bytes() -> tuple[str | None, bytes | None]:
     if not DEFAULT_TEMPLATE_DIR.is_dir():
@@ -1000,6 +1021,8 @@ def main() -> None:
         source_parts = collect_source_items(source_uploads, zip_uploads)
     except zipfile.BadZipFile:
         source_error = "One of the uploaded ZIP files is invalid or corrupted."
+    else:
+        source_error = detect_missing_source_error(source_uploads, zip_uploads, source_parts)
 
     if use_default_template and default_template_bytes is not None:
         template_name = default_template_name
@@ -1043,7 +1066,10 @@ def main() -> None:
 
     if analyze_clicked:
         if not source_parts or not template_bytes:
-            st.error("Please provide at least one source file and a valid Atlas Max template.")
+            if not source_parts and source_error:
+                st.error(source_error)
+            else:
+                st.error("Please provide at least one source file and a valid Atlas Max template.")
         else:
             resolved_template_name = template_name or "atlas-template.ksf"
             st.session_state["preview"] = build_preview(
@@ -1058,7 +1084,10 @@ def main() -> None:
 
     if convert_clicked:
         if not source_parts or not template_bytes:
-            st.error("Please provide at least one source file and a valid Atlas Max template.")
+            if not source_parts and source_error:
+                st.error(source_error)
+            else:
+                st.error("Please provide at least one source file and a valid Atlas Max template.")
         else:
             resolved_template_name = template_name or "atlas-template.ksf"
             preview = build_preview(source_parts, resolved_template_name, template_bytes)
