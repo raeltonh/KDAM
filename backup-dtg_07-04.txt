@@ -114,8 +114,7 @@ SPECIAL_SEPARATION_RULES = {
 # Built-in default template path
 DEFAULT_TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 PREFERRED_TEMPLATE_NAMES = [
-    "Test File.ksf",
-    "default_atlas_template.ksf",
+    "approved_atlas_max_template.ksf",
 ]
 DEFAULT_TEMPLATE_PATH = DEFAULT_TEMPLATE_DIR / PREFERRED_TEMPLATE_NAMES[0]
 
@@ -705,7 +704,7 @@ def main() -> None:
         use_default_template = st.toggle(
             "Use built-in Atlas Max template",
             value=default_template_bytes is not None,
-            help="If enabled, the app first looks for templates/Test File.ksf, then templates/default_atlas_template.ksf, and finally falls back to the first .ksf file found inside templates/.",
+           help="If enabled, the app first looks for templates/approved_atlas_max_template.ksf and then falls back to the first .ksf file found inside templates/.",
         )
 
         template_upload = None
@@ -714,7 +713,7 @@ def main() -> None:
                 st.success(f"Built-in template loaded: {default_template_name}")
             else:
                 st.warning(
-                    "Built-in template not found. Add templates/Test File.ksf, templates/default_atlas_template.ksf, place any .ksf file inside templates/, or upload a template manually."
+                   "Built-in template not found. Add templates/approved_atlas_max_template.ksf, place any .ksf file inside templates/, or upload a template manually."
                 )
         else:
             st.caption("Upload a custom Atlas Max KSF template.")

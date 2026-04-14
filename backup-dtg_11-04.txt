@@ -1,0 +1,1329 @@
+
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import copy
+import io
+import json
+import xml.etree.ElementTree as ET
+from typing import Any, cast
+from pathlib import Path
+import zipfile
+from dataclasses import dataclass
+from functools import lru_cache
+
+import streamlit as st
+from collections import OrderedDict
+from openpyxl import load_workbook
+
+COPY_TAGS = {"TotalCopies"}
+
+SOURCE_PASSTHROUGH_TAGS = {
+    "Tags",
+    "SprayAmount",
+    "LinearSprayAmount",
+    "MaxOpacity",
+    "MinOpacity",
+    "ChokeWhitePixels",
+    "HighlightOpacity",
+    "PrintSpeed2",
+    "PrintDirection",
+    "IsSpray",
+    "IsWipe",
+    "Factory",
+    "Sharpen",
+    "RenderingIntent",
+    "DelaySprayToPrint",
+    "LayerDelay1to2",
+    "MaxDischarge",
+    "UseDischarge",
+    "DischargeOpacity",
+    "MinDischarge",
+    "ChokeDischargePixels",
+    "ColorKnockout",
+    "WhiteKnockout",
+}
+
+
+GEOMETRY_TAGS = {
+    "XOffsetMM",
+    "YOffsetMM",
+    "WidthMM",
+    "HeightMM",
+    "Rotate90",
+    "Rotate180",
+    "RotateSmallDegree",
+    "Mirror",
+    "XCenter",
+    "YCenter",
+    "KeepRatio",
+    "TopCrop",
+    "LeftCrop",
+    "BottomCrop",
+    "RightCrop",
+    "Strips",
+}
+
+ATLAS_SETUP_MAP = {
+    "black_std": {
+        "set_applied": "Atlas MAX+ Black STD",
+        "last_base_setup_name": "Atlas MAX+ Black STD",
+        "media_name": "Atlas MAX+ Black STD",
+        "icc_in_rgb": "RGB Color Space Profile",
+        "icc_out": "Atlas MAX+ Black STD SatRGK",
+        "rendering_intent": "Perceptual",
+    },
+    "black_high_production": {
+        "set_applied": "Atlas MAX+ Black High Production",
+        "last_base_setup_name": "Atlas MAX+ Black High Production",
+        "media_name": "Atlas MAX+ Black HP",
+        "icc_in_rgb": "RGB Color Space Profile",
+        "icc_out": "Atlas MAX+ Black High Production SatRGK",
+        "rendering_intent": "Perceptual",
+    },
+    "black_hq": {
+        "set_applied": "Atlas MAX+ Black HQ",
+        "last_base_setup_name": "Atlas MAX+ Black HQ",
+        "media_name": "Atlas MAX+ Black HQ",
+        "icc_in_rgb": "RGB Color Space Profile",
+        "icc_out": "Atlas MAX+ Black HQ SatRGK",
+        "rendering_intent": "Perceptual",
+    },
+    "light_high_production": {
+        "set_applied": "Atlas MAX+ Light High Production",
+        "last_base_setup_name": "Atlas MAX+ Light High Production",
+        "media_name": "Atlas MAX+ Light High Production",
+        "icc_in_rgb": "RGB Color Space Profile",
+        "icc_out": "Atlas MAX+ Light High Production SatRGK",
+        "rendering_intent": "Perceptual",
+    },
+}
+
+
+ROOT_ATTRS = OrderedDict([
+    ("xmlns:xsd", "http://www.w3.org/2001/XMLSchema"),
+    ("xmlns:xsi", "http://www.w3.org/2001/XMLSchema-instance"),
+])
+
+# Special separation rules block
+SPECIAL_SEPARATION_RULES = {
+    "Qc": {"solid": "25", "max_coverage": "0", "is_max_coverage": "false"},
+    "Qw": {"solid": "0", "max_coverage": "65", "is_max_coverage": "true"},
+    "Iw": {"solid": "25", "max_coverage": "0", "is_max_coverage": "false"},
+    "Ic": {"solid": "25", "max_coverage": "0", "is_max_coverage": "false"},
+}
+
+# Built-in default template path
+DEFAULT_TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
+PREFERRED_TEMPLATE_NAMES = [
+    "approved_atlas_max_template.ksf",
+    "default_atlas_template.ksf",
+]
+DEFAULT_TEMPLATE_PATH = DEFAULT_TEMPLATE_DIR / PREFERRED_TEMPLATE_NAMES[0]
+
+
+PREFERRED_MAPPING_WORKBOOK_NAMES = [
+    "vulcan_mapping_with_atlas_reference.xlsx",
+    "vulcan_mapping_english_with_atlas_reference.xlsx",
+    "vulcan_mapping_starter_table_v2.xlsx",
+]
+MAPPING_WORKBOOK_DIR = Path(__file__).resolve().parent
+
+
+@dataclass(frozen=True)
+class MappingRow:
+    vulcan_setup: str
+    vulcan_media: str
+    input_profile: str
+    output_profile: str
+    atlas_setup: str
+    atlas_media: str
+    atlas_output_icc: str
+    pallet_mapping: str
+    status: str
+    auto_map_key: str
+
+
+@dataclass
+class SourceItem:
+    relative_path: Path
+    data: bytes
+    origin: str
+
+
+@dataclass
+class ConvertedItem:
+    relative_path: Path
+    output_path: Path
+    data: bytes | None
+    status: str
+    error: str | None
+
+
+def load_xml(path: Path) -> ET.ElementTree:
+    return cast(ET.ElementTree, ET.parse(path))
+
+
+def safe_rerun() -> None:
+    rerun = getattr(st, "rerun", None)
+    if callable(rerun):
+        rerun()
+        return
+
+    experimental_rerun = getattr(st, "experimental_rerun", None)
+    if callable(experimental_rerun):
+        experimental_rerun()
+
+
+def dedupe_relative_path(relative_path: Path, used_paths: set[Path]) -> Path:
+    candidate = relative_path
+    counter = 2
+    while candidate in used_paths:
+        candidate = relative_path.with_name(f"{relative_path.stem}_{counter}{relative_path.suffix}")
+        counter += 1
+    used_paths.add(candidate)
+    return candidate
+
+
+def collect_source_items(
+    file_uploads: list[Any] | None,
+    zip_uploads: list[Any] | None,
+) -> list[SourceItem]:
+    items: list[SourceItem] = []
+    used_paths: set[Path] = set()
+
+    for uploaded in file_uploads or []:
+        relative_path = dedupe_relative_path(Path(Path(uploaded.name).name), used_paths)
+        items.append(SourceItem(relative_path=relative_path, data=uploaded.getvalue(), origin="file"))
+
+    for uploaded in zip_uploads or []:
+        zip_root = Path(uploaded.name).stem
+        with zipfile.ZipFile(io.BytesIO(uploaded.getvalue())) as archive:
+            for member in sorted(archive.infolist(), key=lambda info: info.filename):
+                member_path = Path(member.filename)
+                if member.is_dir() or member_path.suffix.lower() != ".ksf":
+                    continue
+                safe_parts = [part for part in member_path.parts if part not in {"", ".", ".."}]
+                if not safe_parts:
+                    continue
+                relative_path = dedupe_relative_path(Path(zip_root, *safe_parts), used_paths)
+                items.append(
+                    SourceItem(
+                        relative_path=relative_path,
+                        data=archive.read(member.filename),
+                        origin="zip",
+                    )
+                )
+
+    return items
+
+
+def detect_missing_source_error(
+    file_uploads: list[Any] | None,
+    zip_uploads: list[Any] | None,
+    source_parts: list[SourceItem],
+) -> str | None:
+    if source_parts:
+        return None
+
+    if file_uploads:
+        return "The uploaded source files could not be processed. Only `.ksf` files are supported."
+
+    if zip_uploads:
+        return (
+            "No `.ksf` files were found inside the uploaded ZIP package(s). "
+            "This converter ignores other formats such as `.kst`, `.xml`, `.lut`, and `.icc`."
+        )
+
+    return None
+
+
+# Helper to load the default template if present
+def load_default_template_bytes() -> tuple[str | None, bytes | None]:
+    if not DEFAULT_TEMPLATE_DIR.is_dir():
+        return None, None
+
+    for filename in PREFERRED_TEMPLATE_NAMES:
+        candidate = DEFAULT_TEMPLATE_DIR / filename
+        if candidate.is_file():
+            return candidate.name, candidate.read_bytes()
+
+    candidates = sorted(DEFAULT_TEMPLATE_DIR.glob("*.ksf"))
+    if not candidates:
+        return None, None
+
+    selected = candidates[0]
+    return selected.name, selected.read_bytes()
+
+
+def normalize_lookup(text: str) -> str:
+    cleaned = normalize(text)
+    for suffix in [".icm", ".icc", ".lut", ".kst"]:
+        if cleaned.endswith(suffix):
+            cleaned = cleaned[: -len(suffix)]
+    return " ".join(cleaned.split())
+
+
+def resolve_mapping_workbook_path() -> Path | None:
+    for filename in PREFERRED_MAPPING_WORKBOOK_NAMES:
+        candidate = MAPPING_WORKBOOK_DIR / filename
+        if candidate.is_file():
+            return candidate
+
+    candidates = sorted(MAPPING_WORKBOOK_DIR.glob("*.xlsx"))
+    if not candidates:
+        return None
+    return candidates[0]
+
+
+@lru_cache(maxsize=1)
+def load_mapping_rows() -> tuple[str | None, list[MappingRow]]:
+    workbook_path = resolve_mapping_workbook_path()
+    if workbook_path is None:
+        return None, []
+
+    workbook = load_workbook(workbook_path, data_only=True)
+    sheet_name = "Vulcan Mapping" if "Vulcan Mapping" in workbook.sheetnames else workbook.sheetnames[0]
+    sheet = workbook[sheet_name]
+
+    headers: dict[str, int] = {}
+    for index, cell in enumerate(sheet[1]):
+        value = str(cell.value or "").strip()
+        if value:
+            headers[value] = index
+
+    def cell_value(row: tuple[Any, ...], header: str) -> str:
+        index = headers.get(header)
+        if index is None or index >= len(row):
+            return ""
+        return str(row[index] or "").strip()
+
+    rows: list[MappingRow] = []
+    for raw_row in sheet.iter_rows(min_row=2, values_only=True):
+        vulcan_setup = cell_value(raw_row, "VULCAN_SETUP")
+        vulcan_media = cell_value(raw_row, "VULCAN_MEDIA")
+        input_profile = cell_value(raw_row, "INPUT_PROFILE")
+        output_profile = cell_value(raw_row, "OUTPUT_PROFILE")
+        atlas_setup = cell_value(raw_row, "ATLAS_SETUP")
+        atlas_media = cell_value(raw_row, "ATLAS_MEDIA")
+        atlas_output_icc = cell_value(raw_row, "ATLAS_OUTPUT_ICC")
+        pallet_mapping = cell_value(raw_row, "PALLET_MAPPING")
+        status = cell_value(raw_row, "STATUS")
+        auto_map_key = cell_value(raw_row, "AUTO_MAP_KEY")
+
+        if not any([vulcan_setup, vulcan_media, input_profile, output_profile, atlas_setup, atlas_media, atlas_output_icc]):
+            continue
+
+        rows.append(
+            MappingRow(
+                vulcan_setup=vulcan_setup,
+                vulcan_media=vulcan_media,
+                input_profile=input_profile,
+                output_profile=output_profile,
+                atlas_setup=atlas_setup,
+                atlas_media=atlas_media,
+                atlas_output_icc=atlas_output_icc,
+                pallet_mapping=pallet_mapping,
+                status=status,
+                auto_map_key=auto_map_key,
+            )
+        )
+
+    return workbook_path.name, rows
+
+
+def find_mapping_row(source_root: ET.Element) -> MappingRow | None:
+    _, rows = load_mapping_rows()
+    if not rows:
+        return None
+
+    source_setup = normalize_lookup(get_text(source_root, "SetApplied"))
+    source_media = normalize_lookup(get_text(source_root, "MediaName"))
+    source_input = normalize_lookup(get_text(source_root, "IccInRGBFileName"))
+    source_output = normalize_lookup(get_text(source_root, "IccOutFileName"))
+
+    best_row: MappingRow | None = None
+    best_score = -1
+
+    for row in rows:
+        row_setup = normalize_lookup(row.vulcan_setup)
+        row_media = normalize_lookup(row.vulcan_media)
+        row_input = normalize_lookup(row.input_profile)
+        row_output = normalize_lookup(row.output_profile)
+
+        score = 0
+        if row_setup and row_setup == source_setup:
+            score += 5
+        elif row_setup:
+            continue
+
+        if row_media and row_media == source_media:
+            score += 4
+        elif row_media:
+            continue
+
+        if row_output and row_output == source_output:
+            score += 3
+        elif row_output:
+            continue
+
+        if row_input and row_input == source_input:
+            score += 2
+
+        if score > best_score:
+            best_score = score
+            best_row = row
+
+    return best_row
+
+
+def apply_mapping_row(target_root: ET.Element, mapping_row: MappingRow | None) -> None:
+    if mapping_row is None:
+        return
+
+    if mapping_row.atlas_setup:
+        replace_simple_text(target_root, "SetApplied", mapping_row.atlas_setup)
+        replace_simple_text(target_root, "LastBaseSetupName", mapping_row.atlas_setup)
+    if mapping_row.atlas_media:
+        replace_simple_text(target_root, "MediaName", mapping_row.atlas_media)
+    if mapping_row.atlas_output_icc:
+        replace_simple_text(target_root, "IccOutFileName", mapping_row.atlas_output_icc)
+    if mapping_row.pallet_mapping:
+        replace_simple_text(target_root, "TableName", mapping_row.pallet_mapping)
+
+
+def parse_ksf_bytes(data: bytes) -> ET.Element:
+    return cast(ET.Element, ET.fromstring(data))
+
+
+def get_text(root: ET.Element, tag: str) -> str:
+    return (root.findtext(tag) or "").strip()
+
+
+def normalize(text: str) -> str:
+    return " ".join(text.lower().replace("_", " ").replace("-", " ").split())
+
+
+def infer_atlas_setup_key(root: ET.Element) -> str | None:
+    media_name = normalize(get_text(root, "MediaName"))
+    set_applied = normalize(get_text(root, "SetApplied"))
+    last_base_setup_name = normalize(get_text(root, "LastBaseSetupName"))
+    icc_out = normalize(get_text(root, "IccOutFileName"))
+
+    primary_text = f" {media_name} {set_applied} {last_base_setup_name} {icc_out} "
+
+    if "dark" in primary_text or "black" in primary_text:
+        if "hq" in primary_text:
+            return "black_hq"
+        if "std" in primary_text or "standard" in primary_text:
+            return "black_std"
+        if any(token in primary_text for token in ["high production", "highproduction", " hp "]):
+            return "black_high_production"
+
+    if "light" in primary_text and any(
+        token in primary_text for token in ["high production", "highproduction"]
+    ):
+        return "light_high_production"
+
+    return None
+
+
+def apply_atlas_setup_mapping(target_root: ET.Element, atlas_setup_key: str | None) -> None:
+    if not atlas_setup_key:
+        return
+    mapping = ATLAS_SETUP_MAP.get(atlas_setup_key)
+    if not mapping:
+        return
+
+    replace_simple_text(target_root, "SetApplied", mapping["set_applied"])
+    replace_simple_text(target_root, "LastBaseSetupName", mapping["last_base_setup_name"])
+    replace_simple_text(target_root, "MediaName", mapping["media_name"])
+    replace_simple_text(target_root, "IccInRGBFileName", mapping["icc_in_rgb"])
+    replace_simple_text(target_root, "IccOutFileName", mapping["icc_out"])
+    replace_simple_text(target_root, "RenderingIntent", mapping["rendering_intent"])
+
+
+def detect_profile(root: ET.Element) -> dict:
+    fields = {
+        "table_name": get_text(root, "TableName"),
+        "media_name": get_text(root, "MediaName"),
+        "set_applied": get_text(root, "SetApplied"),
+        "last_base_setup_name": get_text(root, "LastBaseSetupName"),
+        "machine_type": get_text(root, "MachineType"),
+        "white_pass": get_text(root, "WhitePass"),
+        "icc_out": get_text(root, "IccOutFileName"),
+        "x_offset": get_text(root, "XOffsetMM"),
+        "y_offset": get_text(root, "YOffsetMM"),
+        "spray_amount": get_text(root, "SprayAmount"),
+        "linear_spray_amount": get_text(root, "LinearSprayAmount"),
+        "max_opacity": get_text(root, "MaxOpacity"),
+        "min_opacity": get_text(root, "MinOpacity"),
+        "choke_white_pixels": get_text(root, "ChokeWhitePixels"),
+        "highlight_opacity": get_text(root, "HighlightOpacity"),
+        "print_speed": get_text(root, "PrintSpeed"),
+        "print_speed2": get_text(root, "PrintSpeed2"),
+        "print_direction": get_text(root, "PrintDirection"),
+        "is_spray": get_text(root, "IsSpray"),
+        "is_wipe": get_text(root, "IsWipe"),
+        "factory": get_text(root, "Factory"),
+        "sharpen": get_text(root, "Sharpen"),
+        "icc_in_rgb": get_text(root, "IccInRGBFileName"),
+        "icc_in_cmyk": get_text(root, "IccInCMYKFileName"),
+        "rendering_intent": get_text(root, "RenderingIntent"),
+        "delay_spray_to_print": get_text(root, "DelaySprayToPrint"),
+        "layer_delay_1_to_2": get_text(root, "LayerDelay1to2"),
+        "layer_delay_2_to_3": get_text(root, "LayerDelay2to3"),
+        "max_discharge": get_text(root, "MaxDischarge"),
+        "use_discharge": get_text(root, "UseDischarge"),
+        "discharge_opacity": get_text(root, "DischargeOpacity"),
+        "min_discharge": get_text(root, "MinDischarge"),
+        "choke_discharge_pixels": get_text(root, "ChokeDischargePixels"),
+        "color_knockout": get_text(root, "ColorKnockout"),
+        "white_knockout": get_text(root, "WhiteKnockout"),
+        "image_position": get_text(root, "ImagePosition"),
+        "copies": get_text(root, "TotalCopies"),
+        "atlas_setup_key": infer_atlas_setup_key(root) or "",
+        "mapping_status": "",
+        "mapping_source": "",
+        "mapped_atlas_setup": "",
+        "mapped_atlas_media": "",
+        "mapped_atlas_output_icc": "",
+    }
+    haystack = normalize(
+        " ".join(
+            [
+                fields["table_name"],
+                fields["media_name"],
+                fields["set_applied"],
+                fields["last_base_setup_name"],
+            ]
+        )
+    )
+
+    detected = {
+        "shirt_family": "unknown",
+        "recommended_atlas_family": "review",
+        "warnings": [],
+    }
+
+    if any(key in haystack for key in ["black t shirt", "black tshirt", "black shirt", " black "]):
+        detected["shirt_family"] = "black"
+        detected["recommended_atlas_family"] = "black"
+        detected["warnings"].append(
+            "Source indicates a Black T-shirt. Recommendation: validate a Black setup in Atlas Max."
+        )
+    elif any(key in haystack for key in ["dark", "charcoal", "navy", "burgundy"]):
+        detected["shirt_family"] = "dark"
+        detected["recommended_atlas_family"] = "black"
+        detected["warnings"].append(
+            "Source indicates a dark garment. Recommendation: validate a Black setup in Atlas Max."
+        )
+    elif any(key in haystack for key in ["light", "white", "paper", "transparent"]):
+        detected["shirt_family"] = "light"
+        detected["recommended_atlas_family"] = "light"
+    elif any(key in haystack for key in ["color", "premium", "poly", "cotton"]):
+        detected["shirt_family"] = "color"
+        detected["recommended_atlas_family"] = "color"
+
+    if fields["machine_type"]:
+        detected["warnings"].append(f"Source file detected as {fields['machine_type']}.")
+
+    return {**fields, **detected}
+
+
+def compare_with_template(source_info: dict, template_info: dict) -> list[str]:
+    warnings = list(source_info["warnings"])
+    if not source_info.get("mapped_atlas_setup"):
+        warnings.append("No spreadsheet mapping was found for this source file. Review required.")
+    return warnings
+
+
+
+def replace_or_append(parent: ET.Element, child: ET.Element) -> None:
+    existing = parent.find(child.tag)
+    child_copy = copy.deepcopy(child)
+    if existing is None:
+        parent.append(child_copy)
+    else:
+        index = list(parent).index(existing)
+        parent.remove(existing)
+        parent.insert(index, child_copy)
+
+
+# Only replace existing tag, do not append if missing
+def replace_existing_only(parent: ET.Element, child: ET.Element) -> None:
+    existing = parent.find(child.tag)
+    if existing is None:
+        return
+    index = list(parent).index(existing)
+    parent.remove(existing)
+    parent.insert(index, copy.deepcopy(child))
+
+
+def preserve_geometry(source_root: ET.Element, target_root: ET.Element) -> None:
+    for tag in GEOMETRY_TAGS:
+        source_node = source_root.find(tag)
+        if source_node is not None:
+            replace_existing_only(target_root, source_node)
+
+
+def preserve_copies(source_root: ET.Element, target_root: ET.Element) -> None:
+    for tag in COPY_TAGS:
+        source_node = source_root.find(tag)
+        if source_node is not None:
+            replace_existing_only(target_root, source_node)
+
+
+
+def replace_simple_text(root: ET.Element, tag: str, value: str) -> None:
+    node = root.find(tag)
+    if node is None:
+        node = ET.SubElement(root, tag)
+    node.text = value
+
+
+# Special separation rules function
+def apply_special_separation_rules(target_root: ET.Element) -> None:
+    special_separations = target_root.find("SpecialSeparations")
+    if special_separations is None:
+        return
+
+    existing_models = {
+        model.findtext("Name", default="").strip(): model
+        for model in special_separations.findall("SpecialSepModel")
+    }
+
+    for name, config in SPECIAL_SEPARATION_RULES.items():
+        model = existing_models.get(name)
+        if model is None:
+            model = ET.SubElement(special_separations, "SpecialSepModel")
+            ET.SubElement(model, "Name").text = name
+            ET.SubElement(model, "Enable").text = "true"
+            ET.SubElement(model, "MaxCoverage").text = "0"
+            ET.SubElement(model, "IsMaxCoverage").text = "false"
+            ET.SubElement(model, "Solid").text = "0"
+            ET.SubElement(model, "GradedEdgeOrStrokePixelsAmount").text = "4"
+            ET.SubElement(model, "GradedEdgeOrStrokeLevel").text = "30"
+            ET.SubElement(model, "DefaultGradedEdgeOrStrokePixelsAmount").text = "4"
+            ET.SubElement(model, "DefaultGradedEdgeOrStrokeLevel").text = "30"
+            ET.SubElement(model, "ChannelIndex").text = "0"
+
+        replace_simple_text(model, "Enable", "true")
+        replace_simple_text(model, "Solid", config["solid"])
+        replace_simple_text(model, "MaxCoverage", config["max_coverage"])
+        replace_simple_text(model, "IsMaxCoverage", config["is_max_coverage"])
+
+
+def format_number(value: float, original_text: str | None) -> str:
+    if original_text and "." in original_text:
+        decimals = len(original_text.split(".")[-1])
+        return f"{value:.{decimals}f}".rstrip("0").rstrip(".")
+    if value.is_integer():
+        return str(int(value))
+    return f"{value:.6f}".rstrip("0").rstrip(".")
+
+
+def apply_delta_to_tag(parent: ET.Element, tag: str, delta: float) -> None:
+    node = parent.find(tag)
+    if node is None or node.text is None:
+        return
+    original = node.text.strip()
+    value = float(original)
+    node.text = format_number(value + delta, original)
+
+
+def apply_offset_delta(root: ET.Element, x_delta: float, y_delta: float) -> None:
+    if x_delta:
+        apply_delta_to_tag(root, "XOffsetMM", x_delta)
+        for strip in root.findall("./Strips/StripParam"):
+            apply_delta_to_tag(strip, "XOffsetMM", x_delta)
+    if y_delta:
+        apply_delta_to_tag(root, "YOffsetMM", y_delta)
+        for strip in root.findall("./Strips/StripParam"):
+            apply_delta_to_tag(strip, "YOffsetMM", y_delta)
+
+
+def build_converted_root(
+    source_root: ET.Element,
+    template_tree: ET.ElementTree,
+    geometry_mode: str,
+    copies_mode: str,
+    set_name_mode: str,
+    output_stem: str,
+    x_delta: float,
+    y_delta: float,
+) -> ET.Element:
+    target_root = cast(ET.Element, copy.deepcopy(template_tree.getroot()))
+    white_support_type = target_root.attrib.get("WhiteSupportType", "WBCICC")
+    target_root.attrib.clear()
+    for key, value in ROOT_ATTRS.items():
+        target_root.set(key, value)
+    target_root.set("WhiteSupportType", white_support_type)
+
+    for tag in SOURCE_PASSTHROUGH_TAGS:
+        source_node = source_root.find(tag)
+        if source_node is not None:
+            replace_existing_only(target_root, source_node)
+
+    if geometry_mode == "source":
+        preserve_geometry(source_root, target_root)
+
+    if copies_mode == "source":
+        preserve_copies(source_root, target_root)
+
+    mapping_row = find_mapping_row(source_root)
+    if mapping_row is not None:
+        apply_mapping_row(target_root, mapping_row)
+    else:
+        atlas_setup_key = infer_atlas_setup_key(source_root)
+        apply_atlas_setup_mapping(target_root, atlas_setup_key)
+    apply_special_separation_rules(target_root)
+
+    if set_name_mode == "source-file":
+        replace_simple_text(target_root, "SetApplied", output_stem)
+
+    apply_offset_delta(target_root, x_delta, y_delta)
+    return target_root
+
+
+def serialize_xml(root: ET.Element) -> bytes:
+    xml_bytes = ET.tostring(cast(Any, root), encoding="utf-8")
+    xml_text = '<?xml version="1.0" encoding="utf-8"?>\n' + xml_bytes.decode("utf-8")
+    return xml_text.encode("utf-8")
+
+
+def convert_one(
+    source_path: Path,
+    template_tree: ET.ElementTree,
+    output_path: Path,
+    geometry_mode: str,
+    copies_mode: str,
+    set_name_mode: str,
+    x_delta: float,
+    y_delta: float,
+) -> None:
+    source_tree = load_xml(source_path)
+    source_root = cast(ET.Element, source_tree.getroot())
+    target_root = build_converted_root(
+        source_root=source_root,
+        template_tree=template_tree,
+        geometry_mode=geometry_mode,
+        copies_mode=copies_mode,
+        set_name_mode=set_name_mode,
+        output_stem=output_path.stem,
+        x_delta=x_delta,
+        y_delta=y_delta,
+    )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(serialize_xml(target_root))
+
+
+def build_preview(files: list[SourceItem], template_name: str, template_bytes: bytes) -> dict:
+    template_root = parse_ksf_bytes(template_bytes)
+    template_info = detect_profile(template_root)
+    mapping_workbook_name, _ = load_mapping_rows()
+
+    items = []
+    for item in files:
+        filename = item.relative_path.as_posix()
+        try:
+            root = parse_ksf_bytes(item.data)
+            source_info = detect_profile(root)
+            mapping_row = find_mapping_row(root)
+            if mapping_row is not None:
+                source_info["mapping_status"] = mapping_row.status or "mapped"
+                source_info["mapping_source"] = mapping_workbook_name or "mapping workbook"
+                source_info["mapped_atlas_setup"] = mapping_row.atlas_setup
+                source_info["mapped_atlas_media"] = mapping_row.atlas_media
+                source_info["mapped_atlas_output_icc"] = mapping_row.atlas_output_icc
+            else:
+                source_info["mapping_status"] = "review"
+                source_info["mapping_source"] = "heuristic fallback"
+                source_info["mapped_atlas_setup"] = ""
+                source_info["mapped_atlas_media"] = ""
+                source_info["mapped_atlas_output_icc"] = ""
+
+            items.append(
+                {
+                    "filename": filename,
+                    "origin": item.origin,
+                    "status": "ready",
+                    "source": source_info,
+                    "template": template_info,
+                    "warnings": compare_with_template(source_info, template_info),
+                    "recommended_setup": source_info["recommended_atlas_family"],
+                    "error": None,
+                }
+            )
+        except ET.ParseError as exc:
+            items.append(
+                {
+                    "filename": filename,
+                    "origin": item.origin,
+                    "status": "error",
+                    "source": None,
+                    "template": template_info,
+                    "warnings": [],
+                    "recommended_setup": "review",
+                    "error": f"Invalid XML in source file: {exc}",
+                }
+            )
+
+    return {
+        "template_filename": template_name,
+        "template": template_info,
+        "mapping_workbook": mapping_workbook_name,
+        "items": items,
+    }
+
+
+def convert_sources(
+    source_parts: list[SourceItem],
+    template_bytes: bytes,
+    geometry_mode: str,
+    copies_mode: str,
+    set_name_mode: str,
+    x_delta: float,
+    y_delta: float,
+) -> list[ConvertedItem]:
+    template_root = parse_ksf_bytes(template_bytes)
+    template_tree = ET.ElementTree(template_root)
+    results: list[ConvertedItem] = []
+
+    for source in source_parts:
+        output_path = Path("converted") / source.relative_path
+        try:
+            source_root = parse_ksf_bytes(source.data)
+            converted_root = build_converted_root(
+                source_root=source_root,
+                template_tree=template_tree,
+                geometry_mode=geometry_mode,
+                copies_mode=copies_mode,
+                set_name_mode=set_name_mode,
+                output_stem=output_path.stem,
+                x_delta=x_delta,
+                y_delta=y_delta,
+            )
+            results.append(
+                ConvertedItem(
+                    relative_path=source.relative_path,
+                    output_path=output_path,
+                    data=serialize_xml(converted_root),
+                    status="converted",
+                    error=None,
+                )
+            )
+        except Exception as exc:
+            results.append(
+                ConvertedItem(
+                    relative_path=source.relative_path,
+                    output_path=output_path,
+                    data=None,
+                    status="error",
+                    error=str(exc),
+                )
+            )
+
+    return results
+
+
+def build_conversion_report(preview: dict, converted_items: list[ConvertedItem]) -> dict:
+    status_map = {item.relative_path.as_posix(): item for item in converted_items}
+    report_items = []
+    for preview_item in preview["items"]:
+        converted_item = status_map.get(preview_item["filename"])
+        report_items.append(
+            {
+                **preview_item,
+                "conversion_status": converted_item.status if converted_item else "not-run",
+                "output_filename": converted_item.output_path.as_posix() if converted_item else None,
+                "conversion_error": converted_item.error if converted_item else None,
+            }
+        )
+
+    return {
+        "template_filename": preview["template_filename"],
+        "template": preview["template"],
+        "items": report_items,
+    }
+
+
+def generate_zip_bundle(converted_items: list[ConvertedItem], report: dict) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for item in converted_items:
+            if item.data is None:
+                continue
+            zf.writestr(item.output_path.as_posix(), item.data)
+        zf.writestr("converted/conversion-report.json", json.dumps(report, indent=2, ensure_ascii=False))
+    return buffer.getvalue()
+
+
+def family_label(value: str) -> str:
+    labels = {
+        "black": "BLACK",
+        "light": "LIGHT",
+        "color": "COLOR",
+        "review": "REVIEW",
+        "unknown": "UNKNOWN",
+    }
+    return labels.get(value, value.upper())
+
+
+def render_kpis(source_parts: list[SourceItem], template_name: str | None, preview: dict | None) -> None:
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Input", f"{len(source_parts)} file(s)")
+    with col2:
+        st.metric("Template", template_name or "None")
+    with col3:
+        if not preview:
+            st.metric("Warnings", 0)
+        else:
+            warnings_count = sum(len(item["warnings"]) for item in preview["items"])
+            invalid_count = sum(1 for item in preview["items"] if item["status"] == "error")
+            st.metric("Warnings", warnings_count + invalid_count)
+
+
+def render_preview(preview: dict) -> None:
+    st.subheader("Operational review")
+    if preview.get("mapping_workbook"):
+        st.caption(f"Mapping workbook: {preview['mapping_workbook']}")
+    template = preview["template"]
+    st.caption(
+        f"Atlas template: {template['media_name'] or 'N/A'} | "
+        f"Setup: {template['last_base_setup_name'] or template['set_applied'] or 'N/A'}"
+    )
+
+    priority_warnings = [
+        (item["filename"], warning)
+        for item in preview["items"]
+        for warning in item["warnings"]
+    ]
+    if priority_warnings:
+        for filename, warning in priority_warnings:
+            st.warning(f"{filename}: {warning}")
+    else:
+        st.success("No critical warnings detected in the initial analysis.")
+
+    st.subheader("Analyzed files")
+    for item in preview["items"]:
+        with st.container(border=True):
+            top_a, top_b = st.columns([2.2, 1])
+            with top_a:
+                st.markdown(f"**{item['filename']}**")
+                st.caption(f"Input mode: {item['origin'].upper()}")
+                if item["status"] == "error":
+                    st.error(item["error"])
+                    continue
+                st.write(
+                    f"Source media: `{item['source']['media_name'] or 'N/A'}`  \n"
+                    f"Source setup: `{item['source']['last_base_setup_name'] or item['source']['set_applied'] or 'N/A'}`  \n"
+                    f"Mapping source: `{item['source'].get('mapping_source') or 'N/A'}`  \n"
+                    f"Mapped Atlas setup: `{item['source'].get('mapped_atlas_setup') or 'N/A'}`  \n"
+                    f"Mapped Atlas media: `{item['source'].get('mapped_atlas_media') or 'N/A'}`  \n"
+                    f"Mapped Atlas output ICC: `{item['source'].get('mapped_atlas_output_icc') or 'N/A'}`  \n"
+                    "Special separations in the output are forced to: Qc = 25 solid, Qw = 65 max coverage, Iw = 25 solid, Ic = 25 solid."
+                )
+            with top_b:
+                st.metric("Mapping status", (item["source"].get("mapping_status") or "review").upper())
+                st.caption(
+                    f"Atlas setup: {item['source'].get('mapped_atlas_setup') or 'N/A'} | "
+                    f"Atlas media: {item['source'].get('mapped_atlas_media') or 'N/A'} | "
+                    f"Atlas output ICC: {item['source'].get('mapped_atlas_output_icc') or 'N/A'}"
+                )
+
+            st.caption(
+                f"X: {item['source']['x_offset'] or 'N/A'} | "
+                f"Y: {item['source']['y_offset'] or 'N/A'} | "
+                f"Spray: {item['source']['spray_amount'] or 'N/A'} | "
+                f"Linear Spray: {item['source']['linear_spray_amount'] or 'N/A'} | "
+                f"MaxOpacity: {item['source']['max_opacity'] or 'N/A'} | "
+                f"MinOpacity: {item['source']['min_opacity'] or 'N/A'} | "
+                f"ChokeWhitePixels: {item['source']['choke_white_pixels'] or 'N/A'} | "
+                f"HighlightOpacity: {item['source']['highlight_opacity'] or 'N/A'} | "
+                f"PrintSpeed: {item['source']['print_speed'] or 'N/A'} | "
+                f"PrintDirection: {item['source']['print_direction'] or 'N/A'}"
+            )
+
+            if item["warnings"]:
+                for warning in item["warnings"]:
+                    st.warning(warning)
+            else:
+                st.success("Conversion ready for initial testing with preserved source coordinates and other compatible variable values.")
+
+
+def render_conversion_results(converted_items: list[ConvertedItem], report: dict) -> None:
+    st.subheader("Conversion output")
+    success_count = sum(1 for item in converted_items if item.status == "converted")
+    error_count = sum(1 for item in converted_items if item.status == "error")
+    st.caption(f"Converted: {success_count} | Failed: {error_count}")
+
+    report_bytes = json.dumps(report, indent=2, ensure_ascii=False).encode("utf-8")
+    st.download_button(
+        "Download conversion-report.json",
+        data=report_bytes,
+        file_name="conversion-report.json",
+        mime="application/json",
+        use_container_width=True,
+    )
+
+    for item in converted_items:
+        with st.container(border=True):
+            st.markdown(f"**{item.relative_path.as_posix()}**")
+            if item.status == "converted" and item.data is not None:
+                st.success(f"Generated: {item.output_path.as_posix()}")
+                st.download_button(
+                    f"Download {item.output_path.name}",
+                    data=item.data,
+                    file_name=item.output_path.name,
+                    mime="application/xml",
+                    key=f"download-{item.output_path.as_posix()}",
+                    use_container_width=True,
+                )
+            else:
+                st.error(item.error or "Conversion failed.")
+
+
+def main() -> None:
+    st.set_page_config(
+        page_title="Atlas Max KSF Converter",
+        page_icon="🧩",
+        layout="wide",
+    )
+
+    st.markdown(
+        """
+        <style>
+        .stApp {
+            color: #2f3447;
+            background:
+                radial-gradient(circle at 12% 18%, rgba(255, 184, 168, 0.34), transparent 26%),
+                radial-gradient(circle at 88% 14%, rgba(153, 215, 209, 0.30), transparent 24%),
+                radial-gradient(circle at 78% 78%, rgba(253, 221, 146, 0.26), transparent 24%),
+                radial-gradient(circle at 20% 82%, rgba(196, 214, 169, 0.24), transparent 22%),
+                linear-gradient(180deg, #fffaf5 0%, #fdf7f0 48%, #f8f3ee 100%);
+        }
+        .block-container {
+            padding-top: 1.6rem;
+            padding-bottom: 2.8rem;
+            max-width: 1220px;
+        }
+        .hero-card {
+            background:
+                linear-gradient(135deg, rgba(255, 255, 255, 0.92) 0%, rgba(255, 247, 240, 0.88) 52%, rgba(239, 248, 245, 0.82) 100%);
+            border: 1px solid rgba(112, 126, 154, 0.16);
+            border-radius: 24px;
+            padding: 1.35rem 1.45rem;
+            box-shadow: 0 18px 42px rgba(88, 97, 129, 0.10);
+            margin-bottom: 1rem;
+            backdrop-filter: blur(10px);
+        }
+        .hero-title {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #31374a;
+            margin-bottom: 0.2rem;
+            letter-spacing: -0.03em;
+        }
+        .hero-subtitle {
+            font-size: 1rem;
+            color: #5d667f;
+            line-height: 1.55;
+        }
+        .section-card {
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.90) 0%, rgba(255, 251, 247, 0.78) 100%);
+            border: 1px solid rgba(116, 133, 160, 0.14);
+            border-radius: 22px;
+            padding: 1rem 1rem 0.9rem 1rem;
+            box-shadow: 0 14px 34px rgba(95, 106, 138, 0.08);
+            margin-bottom: 1rem;
+            backdrop-filter: blur(8px);
+        }
+        div[data-testid="stMetric"] {
+            background:
+                linear-gradient(160deg, rgba(255, 241, 234, 0.92) 0%, rgba(239, 248, 245, 0.92) 100%);
+            border: 1px solid rgba(118, 134, 161, 0.14);
+            padding: 1rem;
+            border-radius: 18px;
+            box-shadow: 0 12px 28px rgba(90, 101, 132, 0.08);
+        }
+        div[data-testid="stFileUploader"] {
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.82) 0%, rgba(250, 246, 242, 0.72) 100%);
+            border-radius: 18px;
+            padding: 0.45rem;
+            border: 1px dashed rgba(109, 126, 154, 0.28);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+        }
+        div[data-testid="stFileUploader"] section {
+            background: transparent;
+        }
+        div[data-baseweb="radio"] > div {
+            gap: 0.7rem;
+        }
+        div[data-baseweb="radio"] label {
+            background: rgba(255, 255, 255, 0.52);
+            border: 1px solid rgba(118, 134, 161, 0.16);
+            border-radius: 999px;
+            padding: 0.28rem 0.8rem 0.28rem 0.22rem;
+            box-shadow: 0 8px 18px rgba(94, 106, 136, 0.05);
+        }
+        div[data-baseweb="radio"] label:hover {
+            background: rgba(255, 249, 244, 0.8);
+        }
+        div[data-testid="stButton"] > button, div[data-testid="stDownloadButton"] > button {
+            border-radius: 14px;
+            border: 1px solid rgba(103, 121, 149, 0.18);
+            padding-top: 0.7rem;
+            padding-bottom: 0.7rem;
+            font-weight: 600;
+            box-shadow: 0 12px 24px rgba(93, 104, 134, 0.10);
+            transition: transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
+        }
+        div[data-testid="stButton"] > button {
+            background: linear-gradient(180deg, #ffd9cb 0%, #f8c8b8 100%);
+            color: #5b3d44;
+        }
+        div[data-testid="stDownloadButton"] > button,
+        div[data-testid="stButton"] > button[kind="primary"] {
+            background: linear-gradient(180deg, #bfe8df 0%, #9fd9cf 100%);
+            color: #214b4c;
+        }
+        div[data-testid="stDownloadButton"] > button {
+            background: linear-gradient(180deg, #ffe6a8 0%, #f3d37a 100%);
+            color: #584719;
+            border-color: rgba(158, 128, 52, 0.22);
+        }
+        div[data-testid="stButton"] > button:hover,
+        div[data-testid="stDownloadButton"] > button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 16px 28px rgba(93, 104, 134, 0.14);
+            filter: saturate(1.03);
+        }
+        h1, h2, h3, .stSubheader {
+            color: #31374a;
+            letter-spacing: -0.02em;
+        }
+        p, label, .stCaption, .stMarkdown, .stText {
+            color: #59637b;
+        }
+        div[data-testid="stAlert"] {
+            border-radius: 18px;
+            border-width: 1px;
+            box-shadow: 0 12px 24px rgba(95, 106, 138, 0.05);
+        }
+        div[data-testid="stExpander"] {
+            border-radius: 20px;
+            overflow: hidden;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        """
+        <div class="hero-card">
+            <div class="hero-title">Atlas Max KSF Converter</div>
+            <div class="hero-subtitle">
+                Professional KSF conversion tool using the Atlas Max file as the structural mirror,
+                replacing only Vulcan-compatible values in matching Atlas template fields.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    geometry_mode = "source"
+    copies_mode = "source"
+    set_name_mode = "template"
+    x_delta = 0.0
+    y_delta = 0.0
+
+    default_template_name, default_template_bytes = load_default_template_bytes()
+    uploader_nonce = st.session_state.setdefault("uploader_nonce", 0)
+
+    top_left, top_right = st.columns([1.5, 1])
+    with top_left:
+        st.markdown("<div class='section-card'>", unsafe_allow_html=True)
+        st.subheader("Source files")
+        input_mode = st.radio(
+            "Input mode",
+            options=["Single files", "ZIP", "Mixed"],
+            horizontal=True,
+        )
+        st.caption(
+            "Single files: upload one or more `.ksf` files directly. "
+            "ZIP: upload a `.zip` and scan all `.ksf` files inside it recursively. "
+            "Mixed: combine direct `.ksf` uploads with `.zip` packages in the same batch."
+        )
+        source_uploads = None
+        zip_uploads = None
+        if input_mode in {"Single files", "Mixed"}:
+            st.caption("Upload one or more Vulcan KSF files to convert.")
+            source_uploads = st.file_uploader(
+                "Vulcan source KSF files",
+                type=["ksf"],
+                accept_multiple_files=True,
+                label_visibility="collapsed",
+                key=f"source-ksf-uploader-{uploader_nonce}",
+            )
+        if input_mode in {"ZIP", "Mixed"}:
+            st.caption("Upload one or more ZIP files. The app scans recursively for `.ksf` files.")
+            zip_uploads = st.file_uploader(
+                "ZIP source packages",
+                type=["zip"],
+                accept_multiple_files=True,
+                label_visibility="collapsed",
+                key=f"source-zip-uploader-{uploader_nonce}",
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
+    with top_right:
+        st.markdown("<div class='section-card'>", unsafe_allow_html=True)
+        st.subheader("Atlas template")
+        use_default_template = st.toggle(
+            "Use built-in Atlas Max template",
+            value=default_template_bytes is not None,
+            help="If enabled, the app first looks for templates/approved_atlas_max_template.ksf, then templates/default_atlas_template.ksf, and finally falls back to the first .ksf file found inside templates/.",
+        )
+
+        template_upload = None
+        if use_default_template:
+            if default_template_bytes is not None:
+                st.success(f"Built-in template loaded: {default_template_name}")
+            else:
+                st.warning(
+                    "Built-in template not found. Add templates/approved_atlas_max_template.ksf, templates/default_atlas_template.ksf, place any .ksf file inside templates/, or upload a template manually."
+                )
+        else:
+            st.caption("Upload a custom Atlas Max KSF template.")
+            template_upload = st.file_uploader(
+                "Atlas Max template",
+                type=["ksf"],
+                accept_multiple_files=False,
+                label_visibility="collapsed",
+                key=f"template-uploader-{uploader_nonce}",
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    source_parts: list[SourceItem] = []
+    source_error: str | None = None
+    try:
+        source_parts = collect_source_items(source_uploads, zip_uploads)
+    except zipfile.BadZipFile:
+        source_error = "One of the uploaded ZIP files is invalid or corrupted."
+    else:
+        source_error = detect_missing_source_error(source_uploads, zip_uploads, source_parts)
+
+    if use_default_template and default_template_bytes is not None:
+        template_name = default_template_name
+        template_bytes = default_template_bytes
+    else:
+        template_name = template_upload.name if template_upload else None
+        template_bytes = template_upload.getvalue() if template_upload else None
+
+    render_kpis(source_parts, template_name, st.session_state.get("preview"))
+
+    st.markdown("<div class='section-card'>", unsafe_allow_html=True)
+    st.subheader("Conversion workflow")
+    st.info(
+        "The converted file uses the Atlas Max template only as the structural mirror. Atlas setup, Atlas media and Atlas output ICC should now follow the mapping workbook whenever a matching row is found. Only Vulcan-compatible values are copied into the matching Atlas template fields."
+    )
+    delivery_mode = st.radio(
+        "Delivery mode",
+        options=["ZIP", "Individual files"],
+        horizontal=True,
+        help="ZIP generates a single package with the converted structure. Individual files generates one download per converted KSF plus the JSON report.",
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    action_a, action_b, action_c = st.columns([1, 1.2, 0.8])
+    with action_a:
+        analyze_clicked = st.button("Analyze files", use_container_width=True)
+    with action_b:
+        convert_label = "Convert and export ZIP" if delivery_mode == "ZIP" else "Convert and generate individual files"
+        convert_clicked = st.button(convert_label, type="primary", use_container_width=True)
+    with action_c:
+        clear_clicked = st.button("Clear", use_container_width=True)
+
+    if clear_clicked:
+        for key in ["preview", "converted_items", "conversion_report", "zip_bytes"]:
+            st.session_state.pop(key, None)
+        st.session_state["uploader_nonce"] = uploader_nonce + 1
+        safe_rerun()
+
+    if source_error:
+        st.error(source_error)
+
+    if analyze_clicked:
+        if not source_parts or not template_bytes:
+            if not source_parts and source_error:
+                st.error(source_error)
+            else:
+                st.error("Please provide at least one source file and a valid Atlas Max template.")
+        else:
+            resolved_template_name = template_name or "atlas-template.ksf"
+            st.session_state["preview"] = build_preview(
+                source_parts,
+                resolved_template_name,
+                template_bytes,
+            )
+
+    preview = st.session_state.get("preview")
+    if preview:
+        render_preview(preview)
+
+    if convert_clicked:
+        if not source_parts or not template_bytes:
+            if not source_parts and source_error:
+                st.error(source_error)
+            else:
+                st.error("Please provide at least one source file and a valid Atlas Max template.")
+        else:
+            resolved_template_name = template_name or "atlas-template.ksf"
+            preview = build_preview(source_parts, resolved_template_name, template_bytes)
+            st.session_state["preview"] = preview
+            converted_items = convert_sources(
+                source_parts=source_parts,
+                template_bytes=template_bytes,
+                geometry_mode=geometry_mode,
+                copies_mode=copies_mode,
+                set_name_mode=set_name_mode,
+                x_delta=float(x_delta),
+                y_delta=float(y_delta),
+            )
+            report = build_conversion_report(preview, converted_items)
+            st.session_state["converted_items"] = converted_items
+            st.session_state["conversion_report"] = report
+            if delivery_mode == "ZIP":
+                st.session_state["zip_bytes"] = generate_zip_bundle(converted_items, report)
+            else:
+                st.session_state["zip_bytes"] = None
+            success_count = sum(1 for item in converted_items if item.status == "converted")
+            error_count = sum(1 for item in converted_items if item.status == "error")
+            if success_count:
+                st.success(f"Conversion completed. Success: {success_count} | Failed: {error_count}")
+            else:
+                st.error("No files were converted successfully.")
+
+    zip_bytes = st.session_state.get("zip_bytes")
+    if zip_bytes:
+        st.download_button(
+            "Download atlas-max-converted.zip",
+            data=zip_bytes,
+            file_name="atlas-max-converted.zip",
+            mime="application/zip",
+            use_container_width=True,
+        )
+
+    converted_items = st.session_state.get("converted_items")
+    report = st.session_state.get("conversion_report")
+    if converted_items and report:
+        render_conversion_results(converted_items, report)
+
+
+if __name__ == "__main__":
+    main()

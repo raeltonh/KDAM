@@ -10,9 +10,11 @@ from typing import Any, cast
 from pathlib import Path
 import zipfile
 from dataclasses import dataclass
+from functools import lru_cache
 
 import streamlit as st
 from collections import OrderedDict
+# openpyxl is imported lazily inside load_mapping_rows() so the app can run without it
 
 COPY_TAGS = {"TotalCopies"}
 
@@ -24,12 +26,15 @@ SOURCE_PASSTHROUGH_TAGS = {
     "MinOpacity",
     "ChokeWhitePixels",
     "HighlightOpacity",
+    "ColorSaturation",
     "PrintSpeed2",
     "PrintDirection",
     "IsSpray",
     "IsWipe",
     "Factory",
     "Sharpen",
+    "IccInRGBFileName",
+    "IccInCMYKFileName",
     "RenderingIntent",
     "DelaySprayToPrint",
     "LayerDelay1to2",
@@ -68,7 +73,7 @@ ATLAS_SETUP_MAP = {
         "last_base_setup_name": "Atlas MAX+ Black STD",
         "media_name": "Atlas MAX+ Black STD",
         "icc_in_rgb": "RGB Color Space Profile",
-        "icc_out": "Atlas MAX+ Black STD SatRGK",
+        "icc_out": "Atlas MAX+ Black STD SatRGK.icm",
         "rendering_intent": "Perceptual",
     },
     "black_high_production": {
@@ -76,7 +81,7 @@ ATLAS_SETUP_MAP = {
         "last_base_setup_name": "Atlas MAX+ Black High Production",
         "media_name": "Atlas MAX+ Black HP",
         "icc_in_rgb": "RGB Color Space Profile",
-        "icc_out": "Atlas MAX+ Black High Production SatRGK",
+        "icc_out": "Atlas MAX+ Black High Production.icm",
         "rendering_intent": "Perceptual",
     },
     "black_hq": {
@@ -84,7 +89,7 @@ ATLAS_SETUP_MAP = {
         "last_base_setup_name": "Atlas MAX+ Black HQ",
         "media_name": "Atlas MAX+ Black HQ",
         "icc_in_rgb": "RGB Color Space Profile",
-        "icc_out": "Atlas MAX+ Black HQ SatRGK",
+        "icc_out": "Atlas MAX+ Black HQ.icm",
         "rendering_intent": "Perceptual",
     },
     "light_high_production": {
@@ -92,8 +97,51 @@ ATLAS_SETUP_MAP = {
         "last_base_setup_name": "Atlas MAX+ Light High Production",
         "media_name": "Atlas MAX+ Light High Production",
         "icc_in_rgb": "RGB Color Space Profile",
-        "icc_out": "Atlas MAX+ Light High Production SatRGK",
+        "icc_out": "Atlas MAX+ Light High Production.icm",
         "rendering_intent": "Perceptual",
+    },
+    "light_hq": {
+        "set_applied": "Atlas MAX+ Light HQ",
+        "last_base_setup_name": "Atlas MAX+ Light HQ",
+        "media_name": "Atlas MAX+ Light HQ",
+        "icc_in_rgb": "RGB Color Space Profile",
+        "icc_out": "Atlas MAX+ Light HQ.icm",
+        "rendering_intent": "Perceptual",
+    },
+    "light_std": {
+        "set_applied": "Atlas MAX+ Light STD",
+        "last_base_setup_name": "Atlas MAX+ Light STD",
+        "media_name": "Atlas MAX+ Light STD",
+        "icc_in_rgb": "RGB Color Space Profile",
+        "icc_out": "Atlas MAX+ Light STD.icm",
+        "rendering_intent": "Perceptual",
+    },
+}
+
+CANONICAL_ATLAS_TARGETS = {
+    "Atlas MAX+ Black STD": {
+        "media_name": "Atlas MAX+ Black STD",
+        "icc_out": "Atlas MAX+ Black STD SatRGK.icm",
+    },
+    "Atlas MAX+ Black HQ": {
+        "media_name": "Atlas MAX+ Black HQ",
+        "icc_out": "Atlas MAX+ Black HQ.icm",
+    },
+    "Atlas MAX+ Black High Production": {
+        "media_name": "Atlas MAX+ Black HP",
+        "icc_out": "Atlas MAX+ Black High Production.icm",
+    },
+    "Atlas MAX+ Light High Production": {
+        "media_name": "Atlas MAX+ Light High Production",
+        "icc_out": "Atlas MAX+ Light High Production.icm",
+    },
+    "Atlas MAX+ Light HQ": {
+        "media_name": "Atlas MAX+ Light HQ",
+        "icc_out": "Atlas MAX+ Light HQ.icm",
+    },
+    "Atlas MAX+ Light STD": {
+        "media_name": "Atlas MAX+ Light STD",
+        "icc_out": "Atlas MAX+ Light STD.icm",
     },
 }
 
@@ -106,18 +154,40 @@ ROOT_ATTRS = OrderedDict([
 # Special separation rules block
 SPECIAL_SEPARATION_RULES = {
     "Qc": {"solid": "25", "max_coverage": "0", "is_max_coverage": "false"},
-    "Qw": {"solid": "0", "max_coverage": "65", "is_max_coverage": "true"},
-    "Iw": {"solid": "25", "max_coverage": "0", "is_max_coverage": "false"},
+    "Qw": {"solid": "0", "max_coverage": "55", "is_max_coverage": "true"},
+    "Iw": {"solid": "40", "max_coverage": "0", "is_max_coverage": "false"},
     "Ic": {"solid": "25", "max_coverage": "0", "is_max_coverage": "false"},
 }
 
 # Built-in default template path
 DEFAULT_TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 PREFERRED_TEMPLATE_NAMES = [
-    "Test File.ksf",
+    "approved_atlas_max_template.ksf",
     "default_atlas_template.ksf",
 ]
 DEFAULT_TEMPLATE_PATH = DEFAULT_TEMPLATE_DIR / PREFERRED_TEMPLATE_NAMES[0]
+
+
+PREFERRED_MAPPING_WORKBOOK_NAMES = [
+    "vulcan_mapping_with_atlas_reference.xlsx",
+    "vulcan_mapping_english_with_atlas_reference.xlsx",
+    "vulcan_mapping_starter_table_v2.xlsx",
+]
+MAPPING_WORKBOOK_DIR = Path(__file__).resolve().parent
+
+
+@dataclass(frozen=True)
+class MappingRow:
+    vulcan_setup: str
+    vulcan_media: str
+    input_profile: str
+    output_profile: str
+    atlas_setup: str
+    atlas_media: str
+    atlas_output_icc: str
+    pallet_mapping: str
+    status: str
+    auto_map_key: str
 
 
 @dataclass
@@ -164,16 +234,25 @@ def dedupe_relative_path(relative_path: Path, used_paths: set[Path]) -> Path:
 def collect_source_items(
     file_uploads: list[Any] | None,
     zip_uploads: list[Any] | None,
-) -> list[SourceItem]:
+) -> tuple[list[SourceItem], list[str]]:
     items: list[SourceItem] = []
+    issues: list[str] = []
     used_paths: set[Path] = set()
 
     for uploaded in file_uploads or []:
-        relative_path = dedupe_relative_path(Path(Path(uploaded.name).name), used_paths)
+        uploaded_path = Path(uploaded.name)
+        if uploaded_path.suffix.lower() != ".ksf":
+            continue
+        if uploaded_path.name == ".DS_Store":
+            continue
+        if any(part.startswith("._") for part in uploaded_path.parts):
+            continue
+        if "__MACOSX" in uploaded_path.parts:
+            continue
+        relative_path = dedupe_relative_path(Path(uploaded_path.name), used_paths)
         items.append(SourceItem(relative_path=relative_path, data=uploaded.getvalue(), origin="file"))
 
     for uploaded in zip_uploads or []:
-        zip_root = Path(uploaded.name).stem
         with zipfile.ZipFile(io.BytesIO(uploaded.getvalue())) as archive:
             for member in sorted(archive.infolist(), key=lambda info: info.filename):
                 member_path = Path(member.filename)
@@ -182,7 +261,17 @@ def collect_source_items(
                 safe_parts = [part for part in member_path.parts if part not in {"", ".", ".."}]
                 if not safe_parts:
                     continue
-                relative_path = dedupe_relative_path(Path(zip_root, *safe_parts), used_paths)
+                if safe_parts[0] == "__MACOSX":
+                    continue
+                if member_path.name == ".DS_Store":
+                    continue
+                if any(part.startswith("._") for part in safe_parts):
+                    continue
+                if len(safe_parts) > 1 and safe_parts[0] == Path(uploaded.name).stem:
+                    safe_parts = safe_parts[1:]
+                if not safe_parts:
+                    continue
+                relative_path = dedupe_relative_path(Path(*safe_parts), used_paths)
                 items.append(
                     SourceItem(
                         relative_path=relative_path,
@@ -191,7 +280,7 @@ def collect_source_items(
                     )
                 )
 
-    return items
+    return items, issues
 
 
 def detect_missing_source_error(
@@ -232,6 +321,218 @@ def load_default_template_bytes() -> tuple[str | None, bytes | None]:
     return selected.name, selected.read_bytes()
 
 
+def normalize_lookup(text: str) -> str:
+    cleaned = normalize(text)
+    for suffix in [".icm", ".icc", ".lut", ".kst"]:
+        if cleaned.endswith(suffix):
+            cleaned = cleaned[: -len(suffix)]
+    return " ".join(cleaned.split())
+
+
+# Similarity scoring helper for mapping
+def similarity_score(left: str, right: str) -> int:
+    left_norm = normalize_lookup(left)
+    right_norm = normalize_lookup(right)
+    if not left_norm or not right_norm:
+        return 0
+    if left_norm == right_norm:
+        return 100
+    if left_norm in right_norm or right_norm in left_norm:
+        return 60
+
+    left_tokens = set(left_norm.split())
+    right_tokens = set(right_norm.split())
+    if not left_tokens or not right_tokens:
+        return 0
+
+    overlap = left_tokens & right_tokens
+    if not overlap:
+        return 0
+
+    return int((len(overlap) / max(len(left_tokens), len(right_tokens))) * 40)
+
+
+def resolve_mapping_workbook_path() -> Path | None:
+    for filename in PREFERRED_MAPPING_WORKBOOK_NAMES:
+        candidate = MAPPING_WORKBOOK_DIR / filename
+        if candidate.is_file():
+            return candidate
+
+    candidates = sorted(MAPPING_WORKBOOK_DIR.glob("*.xlsx"))
+    if not candidates:
+        return None
+    return candidates[0]
+
+
+@lru_cache(maxsize=1)
+def load_mapping_rows() -> tuple[str | None, list[MappingRow]]:
+    workbook_path = resolve_mapping_workbook_path()
+    if workbook_path is None:
+        return None, []
+
+    try:
+        import importlib
+        _openpyxl = importlib.import_module("openpyxl")
+        _load_workbook = _openpyxl.load_workbook
+    except ModuleNotFoundError:
+        return None, []
+
+    workbook = _load_workbook(workbook_path, data_only=True)
+    sheet_name = "Vulcan Mapping" if "Vulcan Mapping" in workbook.sheetnames else workbook.sheetnames[0]
+    sheet = workbook[sheet_name]
+
+    headers: dict[str, int] = {}
+    for index, cell in enumerate(sheet[1]):
+        value = str(cell.value or "").strip()
+        if value:
+            headers[value] = index
+
+    def cell_value(row: tuple[Any, ...], header: str) -> str:
+        index = headers.get(header)
+        if index is None or index >= len(row):
+            return ""
+        return str(row[index] or "").strip()
+
+    rows: list[MappingRow] = []
+    for raw_row in sheet.iter_rows(min_row=2, values_only=True):
+        vulcan_setup = cell_value(raw_row, "VULCAN_SETUP")
+        vulcan_media = cell_value(raw_row, "VULCAN_MEDIA")
+        input_profile = cell_value(raw_row, "INPUT_PROFILE")
+        output_profile = cell_value(raw_row, "OUTPUT_PROFILE")
+        atlas_setup = cell_value(raw_row, "ATLAS_SETUP")
+        atlas_media = cell_value(raw_row, "ATLAS_MEDIA")
+        atlas_output_icc = cell_value(raw_row, "ATLAS_OUTPUT_ICC")
+        pallet_mapping = cell_value(raw_row, "PALLET_MAPPING")
+        status = cell_value(raw_row, "STATUS")
+        auto_map_key = cell_value(raw_row, "AUTO_MAP_KEY")
+
+        if not any([vulcan_setup, vulcan_media, input_profile, output_profile, atlas_setup, atlas_media, atlas_output_icc]):
+            continue
+
+        rows.append(
+            MappingRow(
+                vulcan_setup=vulcan_setup,
+                vulcan_media=vulcan_media,
+                input_profile=input_profile,
+                output_profile=output_profile,
+                atlas_setup=atlas_setup,
+                atlas_media=atlas_media,
+                atlas_output_icc=atlas_output_icc,
+                pallet_mapping=pallet_mapping,
+                status=status,
+                auto_map_key=auto_map_key,
+            )
+        )
+
+    return workbook_path.name, rows
+
+
+def find_mapping_row(source_root: ET.Element) -> MappingRow | None:
+    _, rows = load_mapping_rows()
+    if not rows:
+        return None
+
+    source_setup = get_text(source_root, "SetApplied")
+    source_media = get_text(source_root, "MediaName")
+    source_input = get_text(source_root, "IccInRGBFileName")
+    source_output = get_text(source_root, "IccOutFileName")
+
+    source_setup_norm = normalize_lookup(source_setup)
+    source_media_norm = normalize_lookup(source_media)
+    source_input_norm = normalize_lookup(source_input)
+    source_output_norm = normalize_lookup(source_output)
+
+    def row_status_priority(row: MappingRow) -> int:
+        status = normalize_lookup(row.status)
+        if status == "mapped":
+            return 30
+        if status == "fallback":
+            return 20
+        if status == "review":
+            return 10
+        return 0
+
+    def field_presence_bonus(row: MappingRow) -> int:
+        bonus = 0
+        if normalize_lookup(row.vulcan_setup):
+            bonus += 3
+        if normalize_lookup(row.output_profile):
+            bonus += 2
+        if normalize_lookup(row.vulcan_media):
+            bonus += 1
+        return bonus
+
+    best_row: MappingRow | None = None
+    best_score = -1
+
+    for row in rows:
+        row_setup_norm = normalize_lookup(row.vulcan_setup)
+        row_media_norm = normalize_lookup(row.vulcan_media)
+        row_input_norm = normalize_lookup(row.input_profile)
+        row_output_norm = normalize_lookup(row.output_profile)
+
+        score = 0
+
+        # Setup is the primary key.
+        if row_setup_norm and source_setup_norm:
+            if row_setup_norm == source_setup_norm:
+                score += 1000
+            else:
+                score += similarity_score(row.vulcan_setup, source_setup) * 8
+
+        # Output profile is the second strongest signal.
+        if row_output_norm and source_output_norm:
+            if row_output_norm == source_output_norm:
+                score += 700
+            else:
+                score += similarity_score(row.output_profile, source_output) * 6
+
+        # Media is support only, not a strict horizontal requirement.
+        if row_media_norm and source_media_norm:
+            score += similarity_score(row.vulcan_media, source_media) * 3
+
+        # Input profile is a light support signal.
+        if row_input_norm and source_input_norm:
+            score += similarity_score(row.input_profile, source_input)
+
+        score += row_status_priority(row)
+        score += field_presence_bonus(row)
+
+        if score > best_score:
+            best_score = score
+            best_row = row
+
+    if best_score < 120:
+        return None
+
+    return best_row
+
+
+def apply_mapping_row(target_root: ET.Element, mapping_row: MappingRow | None) -> None:
+    if mapping_row is None:
+        return
+
+    atlas_setup = mapping_row.atlas_setup or ""
+    atlas_media = mapping_row.atlas_media or ""
+    atlas_output_icc = mapping_row.atlas_output_icc or ""
+
+    atlas_media, atlas_output_icc = get_canonical_atlas_targets(
+        atlas_setup,
+        atlas_media,
+        atlas_output_icc,
+    )
+
+    if atlas_setup:
+        replace_simple_text(target_root, "SetApplied", atlas_setup)
+        replace_simple_text(target_root, "LastBaseSetupName", atlas_setup)
+    if atlas_media:
+        replace_simple_text(target_root, "MediaName", atlas_media)
+    if atlas_output_icc:
+        replace_simple_text(target_root, "IccOutFileName", atlas_output_icc)
+    if mapping_row.pallet_mapping:
+        replace_simple_text(target_root, "TableName", mapping_row.pallet_mapping)
+
+
 def parse_ksf_bytes(data: bytes) -> ET.Element:
     return cast(ET.Element, ET.fromstring(data))
 
@@ -264,6 +565,10 @@ def infer_atlas_setup_key(root: ET.Element) -> str | None:
         token in primary_text for token in ["high production", "highproduction"]
     ):
         return "light_high_production"
+    if "light" in primary_text and "hq" in primary_text:
+        return "light_hq"
+    if "light" in primary_text and ("std" in primary_text or "standard" in primary_text):
+        return "light_std"
 
     return None
 
@@ -275,12 +580,16 @@ def apply_atlas_setup_mapping(target_root: ET.Element, atlas_setup_key: str | No
     if not mapping:
         return
 
+    media_name, icc_out = get_canonical_atlas_targets(
+        mapping["set_applied"],
+        mapping["media_name"],
+        mapping["icc_out"],
+    )
+
     replace_simple_text(target_root, "SetApplied", mapping["set_applied"])
     replace_simple_text(target_root, "LastBaseSetupName", mapping["last_base_setup_name"])
-    replace_simple_text(target_root, "MediaName", mapping["media_name"])
-    replace_simple_text(target_root, "IccInRGBFileName", mapping["icc_in_rgb"])
-    replace_simple_text(target_root, "IccOutFileName", mapping["icc_out"])
-    replace_simple_text(target_root, "RenderingIntent", mapping["rendering_intent"])
+    replace_simple_text(target_root, "MediaName", media_name)
+    replace_simple_text(target_root, "IccOutFileName", icc_out)
 
 
 def detect_profile(root: ET.Element) -> dict:
@@ -323,6 +632,11 @@ def detect_profile(root: ET.Element) -> dict:
         "image_position": get_text(root, "ImagePosition"),
         "copies": get_text(root, "TotalCopies"),
         "atlas_setup_key": infer_atlas_setup_key(root) or "",
+        "mapping_status": "",
+        "mapping_source": "",
+        "mapped_atlas_setup": "",
+        "mapped_atlas_media": "",
+        "mapped_atlas_output_icc": "",
     }
     haystack = normalize(
         " ".join(
@@ -368,8 +682,8 @@ def detect_profile(root: ET.Element) -> dict:
 
 def compare_with_template(source_info: dict, template_info: dict) -> list[str]:
     warnings = list(source_info["warnings"])
-    if not source_info.get("atlas_setup_key"):
-        warnings.append("No Atlas setup mapping could be inferred from the source file.")
+    if not source_info.get("mapped_atlas_setup"):
+        warnings.append("No spreadsheet mapping was found for this source file. Review required.")
     return warnings
 
 
@@ -415,6 +729,41 @@ def replace_simple_text(root: ET.Element, tag: str, value: str) -> None:
     if node is None:
         node = ET.SubElement(root, tag)
     node.text = value
+
+
+def get_canonical_atlas_targets(
+    atlas_setup: str, fallback_media: str, fallback_icc_out: str
+) -> tuple[str, str]:
+    canonical = CANONICAL_ATLAS_TARGETS.get(atlas_setup)
+    if canonical is None:
+        return fallback_media, fallback_icc_out
+    return canonical["media_name"], canonical["icc_out"]
+
+
+def sync_strip_geometry_from_root(target_root: ET.Element) -> None:
+    strip_params = target_root.findall("./Strips/StripParam")
+    if not strip_params:
+        return
+
+    tags_to_sync = [
+        "XOffsetMM",
+        "YOffsetMM",
+        "WidthMM",
+        "HeightMM",
+        "XCenter",
+        "YCenter",
+        "KeepRatio",
+        "Rotate90",
+        "Rotate180",
+        "RotateSmallDegree",
+        "Mirror",
+    ]
+
+    for strip in strip_params:
+        for tag in tags_to_sync:
+            source_node = target_root.find(tag)
+            if source_node is not None:
+                replace_existing_only(strip, source_node)
 
 
 # Special separation rules function
@@ -502,18 +851,24 @@ def build_converted_root(
 
     if geometry_mode == "source":
         preserve_geometry(source_root, target_root)
+        sync_strip_geometry_from_root(target_root)
 
     if copies_mode == "source":
         preserve_copies(source_root, target_root)
 
-    atlas_setup_key = infer_atlas_setup_key(source_root)
-    apply_atlas_setup_mapping(target_root, atlas_setup_key)
+    mapping_row = find_mapping_row(source_root)
+    if mapping_row is not None:
+        apply_mapping_row(target_root, mapping_row)
+    else:
+        atlas_setup_key = infer_atlas_setup_key(source_root)
+        apply_atlas_setup_mapping(target_root, atlas_setup_key)
     apply_special_separation_rules(target_root)
 
     if set_name_mode == "source-file":
         replace_simple_text(target_root, "SetApplied", output_stem)
 
     apply_offset_delta(target_root, x_delta, y_delta)
+    sync_strip_geometry_from_root(target_root)
     return target_root
 
 
@@ -553,6 +908,7 @@ def convert_one(
 def build_preview(files: list[SourceItem], template_name: str, template_bytes: bytes) -> dict:
     template_root = parse_ksf_bytes(template_bytes)
     template_info = detect_profile(template_root)
+    mapping_workbook_name, _ = load_mapping_rows()
 
     items = []
     for item in files:
@@ -560,6 +916,20 @@ def build_preview(files: list[SourceItem], template_name: str, template_bytes: b
         try:
             root = parse_ksf_bytes(item.data)
             source_info = detect_profile(root)
+            mapping_row = find_mapping_row(root)
+            if mapping_row is not None:
+                source_info["mapping_status"] = mapping_row.status or "mapped"
+                source_info["mapping_source"] = mapping_workbook_name or "mapping workbook"
+                source_info["mapped_atlas_setup"] = mapping_row.atlas_setup
+                source_info["mapped_atlas_media"] = mapping_row.atlas_media
+                source_info["mapped_atlas_output_icc"] = mapping_row.atlas_output_icc
+            else:
+                source_info["mapping_status"] = "review"
+                source_info["mapping_source"] = "no spreadsheet match"
+                source_info["mapped_atlas_setup"] = ""
+                source_info["mapped_atlas_media"] = ""
+                source_info["mapped_atlas_output_icc"] = ""
+
             items.append(
                 {
                     "filename": filename,
@@ -589,6 +959,7 @@ def build_preview(files: list[SourceItem], template_name: str, template_bytes: b
     return {
         "template_filename": template_name,
         "template": template_info,
+        "mapping_workbook": mapping_workbook_name,
         "items": items,
     }
 
@@ -607,7 +978,7 @@ def convert_sources(
     results: list[ConvertedItem] = []
 
     for source in source_parts:
-        output_path = Path("converted") / source.relative_path
+        output_path = Path("converted") / source.relative_path.name
         try:
             source_root = parse_ksf_bytes(source.data)
             converted_root = build_converted_root(
@@ -670,7 +1041,14 @@ def generate_zip_bundle(converted_items: list[ConvertedItem], report: dict) -> b
         for item in converted_items:
             if item.data is None:
                 continue
-            zf.writestr(item.output_path.as_posix(), item.data)
+            output_path = item.output_path
+            if output_path.name == ".DS_Store":
+                continue
+            if any(part.startswith("._") for part in output_path.parts):
+                continue
+            if "__MACOSX" in output_path.parts:
+                continue
+            zf.writestr(output_path.as_posix(), item.data)
         zf.writestr("converted/conversion-report.json", json.dumps(report, indent=2, ensure_ascii=False))
     return buffer.getvalue()
 
@@ -702,62 +1080,81 @@ def render_kpis(source_parts: list[SourceItem], template_name: str | None, previ
 
 
 def render_preview(preview: dict) -> None:
-    st.subheader("Operational review")
-    template = preview["template"]
-    st.caption(
-        f"Atlas template: {template['media_name'] or 'N/A'} | "
-        f"Setup: {template['last_base_setup_name'] or template['set_applied'] or 'N/A'}"
-    )
-
     priority_warnings = [
         (item["filename"], warning)
         for item in preview["items"]
         for warning in item["warnings"]
     ]
+    invalid_count = sum(1 for item in preview["items"] if item["status"] == "error")
+    summary_parts = [f"{len(preview['items'])} file(s) analyzed"]
     if priority_warnings:
-        for filename, warning in priority_warnings:
-            st.warning(f"{filename}: {warning}")
-    else:
-        st.success("No critical warnings detected in the initial analysis.")
+        summary_parts.append(f"{len(priority_warnings)} warning(s)")
+    if invalid_count:
+        summary_parts.append(f"{invalid_count} invalid file(s)")
 
-    st.subheader("Analyzed files")
-    for item in preview["items"]:
-        with st.container(border=True):
-            top_a, top_b = st.columns([2.2, 1])
-            with top_a:
-                st.markdown(f"**{item['filename']}**")
-                st.caption(f"Input mode: {item['origin'].upper()}")
-                if item["status"] == "error":
-                    st.error(item["error"])
-                    continue
-                st.write(
-                    f"Source: `{item['source']['media_name'] or 'N/A'}`  \n"
-                    f"Source setup: `{item['source']['last_base_setup_name'] or item['source']['set_applied'] or 'N/A'}`  \n"
-                    f"Detected mapping: `{item['source']['atlas_setup_key'] or 'N/A'}`  \n"
-                    "Active mapping rules: Black + STD → Black STD | Black + High Production → Black High Production | Light + High Production → Light High Production | Black + HQ → Black HQ. Special separations in the output are forced to: Qc = 25 solid, Qw = 65 max coverage, Iw = 25 solid, Ic = 25 solid."
+    with st.expander(f"Operational review and analyzed files ({' | '.join(summary_parts)})", expanded=False):
+        st.subheader("Operational review")
+        if preview.get("mapping_workbook"):
+            st.caption(f"Mapping workbook: {preview['mapping_workbook']}")
+        else:
+            st.caption("Mapping workbook: unavailable because openpyxl is not installed or no workbook was found.")
+        template = preview["template"]
+        st.caption(
+            f"Atlas template: {template['media_name'] or 'N/A'} | "
+            f"Setup: {template['last_base_setup_name'] or template['set_applied'] or 'N/A'}"
+        )
+
+        if priority_warnings:
+            for filename, warning in priority_warnings:
+                st.warning(f"{filename}: {warning}")
+        else:
+            st.success("No critical warnings detected in the initial analysis.")
+
+        st.subheader("Analyzed files")
+        for item in preview["items"]:
+            with st.container(border=True):
+                top_a, top_b = st.columns([2.2, 1])
+                with top_a:
+                    st.markdown(f"**{item['filename']}**")
+                    st.caption(f"Input mode: {item['origin'].upper()}")
+                    if item["status"] == "error":
+                        st.error(item["error"])
+                        continue
+                    st.write(
+                        f"Source media: `{item['source']['media_name'] or 'N/A'}`  \n"
+                        f"Source setup: `{item['source']['last_base_setup_name'] or item['source']['set_applied'] or 'N/A'}`  \n"
+                        f"Mapping source: `{item['source'].get('mapping_source') or 'N/A'}`  \n"
+                        f"Mapped Atlas setup: `{item['source'].get('mapped_atlas_setup') or 'N/A'}`  \n"
+                        f"Mapped Atlas media: `{item['source'].get('mapped_atlas_media') or 'N/A'}`  \n"
+                        f"Mapped Atlas output ICC: `{item['source'].get('mapped_atlas_output_icc') or 'N/A'}`  \n"
+                        "Matching priority: Vulcan setup first, output profile second, Vulcan media as support, and input profile as a light support signal. The spreadsheet is not treated as a strict horizontal all-fields-must-match rule. Special separations in the output are forced to: Qc = 25 solid, Qw = 65 max coverage, Iw = 25 solid, Ic = 25 solid."
+                    )
+                with top_b:
+                    st.metric("Mapping status", (item["source"].get("mapping_status") or "review").upper())
+                    st.caption(
+                        f"Atlas setup: {item['source'].get('mapped_atlas_setup') or 'N/A'} | "
+                        f"Atlas media: {item['source'].get('mapped_atlas_media') or 'N/A'} | "
+                        f"Atlas output ICC: {item['source'].get('mapped_atlas_output_icc') or 'N/A'}"
+                    )
+
+                st.caption(
+                    f"X: {item['source']['x_offset'] or 'N/A'} | "
+                    f"Y: {item['source']['y_offset'] or 'N/A'} | "
+                    f"Spray: {item['source']['spray_amount'] or 'N/A'} | "
+                    f"Linear Spray: {item['source']['linear_spray_amount'] or 'N/A'} | "
+                    f"MaxOpacity: {item['source']['max_opacity'] or 'N/A'} | "
+                    f"MinOpacity: {item['source']['min_opacity'] or 'N/A'} | "
+                    f"ChokeWhitePixels: {item['source']['choke_white_pixels'] or 'N/A'} | "
+                    f"HighlightOpacity: {item['source']['highlight_opacity'] or 'N/A'} | "
+                    f"PrintSpeed: {item['source']['print_speed'] or 'N/A'} | "
+                    f"PrintDirection: {item['source']['print_direction'] or 'N/A'}"
                 )
-            with top_b:
-                st.metric("Recommendation", family_label(item["recommended_setup"]))
-                st.caption(f"Detected family: {item['source']['shirt_family'].upper() if item['source']['shirt_family'] else 'N/A'} | Atlas mapping: {(item['source']['atlas_setup_key'] or 'N/A').upper()} | Rule set: BLACK_STD / BLACK_HP / LIGHT_HP / BLACK_HQ")
 
-            st.caption(
-                f"X: {item['source']['x_offset'] or 'N/A'} | "
-                f"Y: {item['source']['y_offset'] or 'N/A'} | "
-                f"Spray: {item['source']['spray_amount'] or 'N/A'} | "
-                f"Linear Spray: {item['source']['linear_spray_amount'] or 'N/A'} | "
-                f"MaxOpacity: {item['source']['max_opacity'] or 'N/A'} | "
-                f"MinOpacity: {item['source']['min_opacity'] or 'N/A'} | "
-                f"ChokeWhitePixels: {item['source']['choke_white_pixels'] or 'N/A'} | "
-                f"HighlightOpacity: {item['source']['highlight_opacity'] or 'N/A'} | "
-                f"PrintSpeed: {item['source']['print_speed'] or 'N/A'} | "
-                f"PrintDirection: {item['source']['print_direction'] or 'N/A'}"
-            )
-
-            if item["warnings"]:
-                for warning in item["warnings"]:
-                    st.warning(warning)
-            else:
-                st.success("Conversion ready for initial testing with preserved source coordinates and other compatible variable values.")
+                if item["warnings"]:
+                    for warning in item["warnings"]:
+                        st.warning(warning)
+                else:
+                    st.success("Spreadsheet mapping found. Conversion is ready for initial testing with preserved source coordinates and other compatible variable values.")
 
 
 def render_conversion_results(converted_items: list[ConvertedItem], report: dict) -> None:
@@ -765,31 +1162,16 @@ def render_conversion_results(converted_items: list[ConvertedItem], report: dict
     success_count = sum(1 for item in converted_items if item.status == "converted")
     error_count = sum(1 for item in converted_items if item.status == "error")
     st.caption(f"Converted: {success_count} | Failed: {error_count}")
-
-    report_bytes = json.dumps(report, indent=2, ensure_ascii=False).encode("utf-8")
-    st.download_button(
-        "Download conversion-report.json",
-        data=report_bytes,
-        file_name="conversion-report.json",
-        mime="application/json",
-        use_container_width=True,
-    )
-
-    for item in converted_items:
+    failed_items = [item for item in converted_items if item.status == "error"]
+    if failed_items:
         with st.container(border=True):
-            st.markdown(f"**{item.relative_path.as_posix()}**")
-            if item.status == "converted" and item.data is not None:
-                st.success(f"Generated: {item.output_path.as_posix()}")
-                st.download_button(
-                    f"Download {item.output_path.name}",
-                    data=item.data,
-                    file_name=item.output_path.name,
-                    mime="application/xml",
-                    key=f"download-{item.output_path.as_posix()}",
-                    use_container_width=True,
-                )
-            else:
-                st.error(item.error or "Conversion failed.")
+            st.markdown("**Failed files**")
+            for item in failed_items[:10]:
+                st.error(f"{item.relative_path.as_posix()}: {item.error or 'Conversion failed.'}")
+            if len(failed_items) > 10:
+                st.caption(f"And {len(failed_items) - 10} more failed file(s). Check `conversion-report.json` inside the ZIP.")
+    else:
+        st.success("All files were converted successfully. Download the ZIP package below.")
 
 
 def main() -> None:
@@ -971,7 +1353,7 @@ def main() -> None:
         if input_mode in {"Single files", "Mixed"}:
             st.caption("Upload one or more Vulcan KSF files to convert.")
             source_uploads = st.file_uploader(
-                "Vulcan source KSF files",
+                "Vulcan source files",
                 type=["ksf"],
                 accept_multiple_files=True,
                 label_visibility="collapsed",
@@ -993,7 +1375,7 @@ def main() -> None:
         use_default_template = st.toggle(
             "Use built-in Atlas Max template",
             value=default_template_bytes is not None,
-            help="If enabled, the app first looks for templates/Test File.ksf, then templates/default_atlas_template.ksf, and finally falls back to the first .ksf file found inside templates/.",
+            help="If enabled, the app first looks for templates/approved_atlas_max_template.ksf, then templates/default_atlas_template.ksf, and finally falls back to the first .ksf file found inside templates/.",
         )
 
         template_upload = None
@@ -1002,7 +1384,7 @@ def main() -> None:
                 st.success(f"Built-in template loaded: {default_template_name}")
             else:
                 st.warning(
-                    "Built-in template not found. Add templates/Test File.ksf, templates/default_atlas_template.ksf, place any .ksf file inside templates/, or upload a template manually."
+                    "Built-in template not found. Add templates/approved_atlas_max_template.ksf, templates/default_atlas_template.ksf, place any .ksf file inside templates/, or upload a template manually."
                 )
         else:
             st.caption("Upload a custom Atlas Max KSF template.")
@@ -1016,9 +1398,10 @@ def main() -> None:
         st.markdown("</div>", unsafe_allow_html=True)
 
     source_parts: list[SourceItem] = []
+    source_collection_issues: list[str] = []
     source_error: str | None = None
     try:
-        source_parts = collect_source_items(source_uploads, zip_uploads)
+        source_parts, source_collection_issues = collect_source_items(source_uploads, zip_uploads)
     except zipfile.BadZipFile:
         source_error = "One of the uploaded ZIP files is invalid or corrupted."
     else:
@@ -1036,22 +1419,16 @@ def main() -> None:
     st.markdown("<div class='section-card'>", unsafe_allow_html=True)
     st.subheader("Conversion workflow")
     st.info(
-        "The converted file uses the Atlas Max file only as the structural mirror. The final setup, media and profiles follow these active rules: Black + STD → Black STD, Black + High Production → Black High Production, Light + High Production → Light High Production, and Black + HQ → Black HQ."
+        "The converted file uses the Atlas Max template only as the structural mirror. Mapping priority now follows this order: Vulcan setup first, output profile second, Vulcan media as support, and input profile as a light support signal. The workbook is not treated as a strict horizontal row where every source field must match exactly. Atlas setup, Atlas media and Atlas output ICC come from the selected workbook row whenever a reliable match is found."
     )
-    delivery_mode = st.radio(
-        "Delivery mode",
-        options=["ZIP", "Individual files"],
-        horizontal=True,
-        help="ZIP generates a single package with the converted structure. Individual files generates one download per converted KSF plus the JSON report.",
-    )
+    st.caption("Output is always generated as a single ZIP package with the converted KSF files and `conversion-report.json`.")
     st.markdown("</div>", unsafe_allow_html=True)
 
     action_a, action_b, action_c = st.columns([1, 1.2, 0.8])
     with action_a:
         analyze_clicked = st.button("Analyze files", use_container_width=True)
     with action_b:
-        convert_label = "Convert and export ZIP" if delivery_mode == "ZIP" else "Convert and generate individual files"
-        convert_clicked = st.button(convert_label, type="primary", use_container_width=True)
+        convert_clicked = st.button("Convert and export ZIP", type="primary", use_container_width=True)
     with action_c:
         clear_clicked = st.button("Clear", use_container_width=True)
 
@@ -1063,6 +1440,8 @@ def main() -> None:
 
     if source_error:
         st.error(source_error)
+    for issue in source_collection_issues:
+        st.error(issue)
 
     if analyze_clicked:
         if not source_parts or not template_bytes:
@@ -1104,10 +1483,7 @@ def main() -> None:
             report = build_conversion_report(preview, converted_items)
             st.session_state["converted_items"] = converted_items
             st.session_state["conversion_report"] = report
-            if delivery_mode == "ZIP":
-                st.session_state["zip_bytes"] = generate_zip_bundle(converted_items, report)
-            else:
-                st.session_state["zip_bytes"] = None
+            st.session_state["zip_bytes"] = generate_zip_bundle(converted_items, report)
             success_count = sum(1 for item in converted_items if item.status == "converted")
             error_count = sum(1 for item in converted_items if item.status == "error")
             if success_count:
