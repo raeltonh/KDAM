@@ -167,27 +167,150 @@ PREFERRED_TEMPLATE_NAMES = [
 ]
 DEFAULT_TEMPLATE_PATH = DEFAULT_TEMPLATE_DIR / PREFERRED_TEMPLATE_NAMES[0]
 
+PREFERRED_CROSS_TEMPLATE_NAMES = {
+    "plus_to_poly": [
+        "approved_atlas_max_poly_template.ksf",
+        "atlas_max_poly_output_template.ksf",
+        "approved_poly_output_template.ksf",
+        "poly_output_template.ksf",
+    ],
+    "poly_to_plus": [
+        "approved_atlas_max_template.ksf",
+        "atlas_max_plus_output_template.ksf",
+        "approved_plus_output_template.ksf",
+        "plus_output_template.ksf",
+    ],
+}
+
 
 PREFERRED_MAPPING_WORKBOOK_NAMES = [
+    "vulcan_mapping_with_atlas_reference_adj.xlsx",
     "vulcan_mapping_with_atlas_reference.xlsx",
     "vulcan_mapping_english_with_atlas_reference.xlsx",
     "vulcan_mapping_starter_table_v2.xlsx",
+    "atlas_max_plus_to_poly_mapping_template.xlsx",
 ]
 MAPPING_WORKBOOK_DIR = Path(__file__).resolve().parent
+
+LEGACY_MAPPING_WORKBOOK_NAMES = (
+    "vulcan_mapping_with_atlas_reference_adj.xlsx",
+    "vulcan_mapping_with_atlas_reference.xlsx",
+    "vulcan_mapping_english_with_atlas_reference.xlsx",
+    "vulcan_mapping_starter_table_v2.xlsx",
+)
+
+CROSS_MAPPING_WORKBOOK_NAMES = (
+    "atlas_max_plus_to_poly_mapping_template.xlsx",
+)
 
 
 @dataclass(frozen=True)
 class MappingRow:
-    vulcan_setup: str
-    vulcan_media: str
-    input_profile: str
-    output_profile: str
-    atlas_setup: str
-    atlas_media: str
-    atlas_output_icc: str
-    pallet_mapping: str
+    workbook_name: str
+    sheet_name: str
+    source_family: str
+    target_family: str
+    source_setup: str
+    source_media: str
+    source_input_rgb: str
+    source_input_cmyk: str
+    source_output_icc: str
+    target_setup: str
+    target_base_setup: str
+    target_media: str
+    target_input_rgb: str
+    target_input_cmyk: str
+    target_output_icc: str
+    target_pallet: str
     status: str
     auto_map_key: str
+    notes: str
+
+
+@dataclass(frozen=True)
+class MappingSheetDefinition:
+    sheet_name: str
+    source_family: str
+    target_family: str
+    source_setup_headers: tuple[str, ...]
+    source_media_headers: tuple[str, ...]
+    source_output_headers: tuple[str, ...]
+    source_input_rgb_headers: tuple[str, ...]
+    source_input_cmyk_headers: tuple[str, ...]
+    target_setup_headers: tuple[str, ...]
+    target_base_setup_headers: tuple[str, ...]
+    target_media_headers: tuple[str, ...]
+    target_output_headers: tuple[str, ...]
+    target_input_rgb_headers: tuple[str, ...]
+    target_input_cmyk_headers: tuple[str, ...]
+    target_pallet_headers: tuple[str, ...]
+    status_headers: tuple[str, ...]
+    auto_map_key_headers: tuple[str, ...]
+    notes_headers: tuple[str, ...]
+
+
+MAPPING_SHEET_DEFINITIONS = (
+    MappingSheetDefinition(
+        sheet_name="Plus_to_Poly_Mapping",
+        source_family="plus",
+        target_family="poly",
+        source_setup_headers=("PLUS_SETUP", "PLUS_BASE_SETUP"),
+        source_media_headers=("PLUS_MEDIA",),
+        source_output_headers=("PLUS_OUTPUT_ICC",),
+        source_input_rgb_headers=("PLUS_INPUT_RGB",),
+        source_input_cmyk_headers=("PLUS_INPUT_CMYK",),
+        target_setup_headers=("POLY_SETUP",),
+        target_base_setup_headers=("POLY_BASE_SETUP",),
+        target_media_headers=("POLY_MEDIA",),
+        target_output_headers=("POLY_OUTPUT_ICC",),
+        target_input_rgb_headers=("POLY_INPUT_RGB",),
+        target_input_cmyk_headers=("POLY_INPUT_CMYK",),
+        target_pallet_headers=("POLY_PALLET",),
+        status_headers=("STATUS",),
+        auto_map_key_headers=("AUTO_MAP_KEY",),
+        notes_headers=("NOTES",),
+    ),
+    MappingSheetDefinition(
+        sheet_name="Poly_to_Plus_Mapping",
+        source_family="poly",
+        target_family="plus",
+        source_setup_headers=("POLY_SETUP", "POLY_BASE_SETUP"),
+        source_media_headers=("POLY_MEDIA",),
+        source_output_headers=("POLY_OUTPUT_ICC",),
+        source_input_rgb_headers=("POLY_INPUT_RGB",),
+        source_input_cmyk_headers=("POLY_INPUT_CMYK",),
+        target_setup_headers=("PLUS_SETUP",),
+        target_base_setup_headers=("PLUS_BASE_SETUP",),
+        target_media_headers=("PLUS_MEDIA",),
+        target_output_headers=("PLUS_OUTPUT_ICC",),
+        target_input_rgb_headers=("PLUS_INPUT_RGB",),
+        target_input_cmyk_headers=("PLUS_INPUT_CMYK",),
+        target_pallet_headers=("PLUS_PALLET",),
+        status_headers=("STATUS",),
+        auto_map_key_headers=("AUTO_MAP_KEY",),
+        notes_headers=("NOTES",),
+    ),
+    MappingSheetDefinition(
+        sheet_name="Vulcan Mapping",
+        source_family="vulcan",
+        target_family="atlas",
+        source_setup_headers=("VULCAN_SETUP",),
+        source_media_headers=("VULCAN_MEDIA",),
+        source_output_headers=("OUTPUT_PROFILE",),
+        source_input_rgb_headers=("INPUT_PROFILE",),
+        source_input_cmyk_headers=("INPUT_PROFILE_CMYK",),
+        target_setup_headers=("ATLAS_SETUP",),
+        target_base_setup_headers=("ATLAS_SETUP",),
+        target_media_headers=("ATLAS_MEDIA",),
+        target_output_headers=("ATLAS_OUTPUT_ICC",),
+        target_input_rgb_headers=("ATLAS_INPUT_RGB",),
+        target_input_cmyk_headers=("ATLAS_INPUT_CMYK",),
+        target_pallet_headers=("PALLET_MAPPING",),
+        status_headers=("STATUS",),
+        auto_map_key_headers=("AUTO_MAP_KEY",),
+        notes_headers=("NOTES",),
+    ),
+)
 
 
 @dataclass
@@ -321,6 +444,18 @@ def load_default_template_bytes() -> tuple[str | None, bytes | None]:
     return selected.name, selected.read_bytes()
 
 
+def load_preferred_template_bytes(preferred_names: list[str]) -> tuple[str | None, bytes | None]:
+    if not DEFAULT_TEMPLATE_DIR.is_dir():
+        return None, None
+
+    for filename in preferred_names:
+        candidate = DEFAULT_TEMPLATE_DIR / filename
+        if candidate.is_file():
+            return candidate.name, candidate.read_bytes()
+
+    return None, None
+
+
 def normalize_lookup(text: str) -> str:
     cleaned = normalize(text)
     for suffix in [".icm", ".icc", ".lut", ".kst"]:
@@ -352,32 +487,141 @@ def similarity_score(left: str, right: str) -> int:
     return int((len(overlap) / max(len(left_tokens), len(right_tokens))) * 40)
 
 
-def resolve_mapping_workbook_path() -> Path | None:
-    for filename in PREFERRED_MAPPING_WORKBOOK_NAMES:
+def resolve_mapping_workbook_paths() -> list[Path]:
+    selected_paths: list[Path] = []
+    seen: set[Path] = set()
+
+    for filename in CROSS_MAPPING_WORKBOOK_NAMES:
+        candidate = MAPPING_WORKBOOK_DIR / filename
+        if candidate.is_file() and candidate not in seen:
+            selected_paths.append(candidate)
+            seen.add(candidate)
+
+    if selected_paths:
+        return selected_paths
+
+    for candidate in sorted(MAPPING_WORKBOOK_DIR.glob("*.xlsx")):
+        if candidate not in seen:
+            selected_paths.append(candidate)
+            seen.add(candidate)
+
+    return selected_paths
+
+
+def resolve_single_mapping_workbook_path(preferred_names: tuple[str, ...]) -> Path | None:
+    for filename in preferred_names:
         candidate = MAPPING_WORKBOOK_DIR / filename
         if candidate.is_file():
             return candidate
-
-    candidates = sorted(MAPPING_WORKBOOK_DIR.glob("*.xlsx"))
-    if not candidates:
-        return None
-    return candidates[0]
+    return None
 
 
-@lru_cache(maxsize=1)
-def load_mapping_rows() -> tuple[str | None, list[MappingRow]]:
-    workbook_path = resolve_mapping_workbook_path()
-    if workbook_path is None:
-        return None, []
+def first_header_value(
+    row: tuple[Any, ...],
+    headers: dict[str, list[int]],
+    header_names: tuple[str, ...],
+) -> str:
+    for header_name in header_names:
+        for index in headers.get(header_name, []):
+            if index >= len(row):
+                continue
+            value = str(row[index] or "").strip()
+            if value:
+                return value
+    return ""
 
+
+def collect_mapping_rows_from_sheet(
+    sheet: Any,
+    definition: MappingSheetDefinition,
+    workbook_name: str,
+) -> list[MappingRow]:
+    headers: dict[str, list[int]] = {}
+    for index, cell in enumerate(sheet[1]):
+        value = str(cell.value or "").strip()
+        if value:
+            headers.setdefault(value, []).append(index)
+
+    rows: list[MappingRow] = []
+    for raw_row in sheet.iter_rows(min_row=2, values_only=True):
+        source_setup = first_header_value(raw_row, headers, definition.source_setup_headers)
+        source_media = first_header_value(raw_row, headers, definition.source_media_headers)
+        source_output_icc = first_header_value(raw_row, headers, definition.source_output_headers)
+        source_input_rgb = first_header_value(raw_row, headers, definition.source_input_rgb_headers)
+        source_input_cmyk = first_header_value(raw_row, headers, definition.source_input_cmyk_headers)
+        target_setup = first_header_value(raw_row, headers, definition.target_setup_headers)
+        target_base_setup = first_header_value(raw_row, headers, definition.target_base_setup_headers)
+        target_media = first_header_value(raw_row, headers, definition.target_media_headers)
+        target_output_icc = first_header_value(raw_row, headers, definition.target_output_headers)
+        target_input_rgb = first_header_value(raw_row, headers, definition.target_input_rgb_headers)
+        target_input_cmyk = first_header_value(raw_row, headers, definition.target_input_cmyk_headers)
+        target_pallet = first_header_value(raw_row, headers, definition.target_pallet_headers)
+        status = first_header_value(raw_row, headers, definition.status_headers)
+        auto_map_key = first_header_value(raw_row, headers, definition.auto_map_key_headers)
+        notes = first_header_value(raw_row, headers, definition.notes_headers)
+
+        if not any(
+            [
+                source_setup,
+                source_media,
+                source_output_icc,
+                source_input_rgb,
+                source_input_cmyk,
+                target_setup,
+                target_base_setup,
+                target_media,
+                target_output_icc,
+            ]
+        ):
+            continue
+
+        rows.append(
+            MappingRow(
+                workbook_name=workbook_name,
+                sheet_name=definition.sheet_name,
+                source_family=definition.source_family,
+                target_family=definition.target_family,
+                source_setup=source_setup,
+                source_media=source_media,
+                source_input_rgb=source_input_rgb,
+                source_input_cmyk=source_input_cmyk,
+                source_output_icc=source_output_icc,
+                target_setup=target_setup,
+                target_base_setup=target_base_setup,
+                target_media=target_media,
+                target_input_rgb=target_input_rgb,
+                target_input_cmyk=target_input_cmyk,
+                target_output_icc=target_output_icc,
+                target_pallet=target_pallet,
+                status=status,
+                auto_map_key=auto_map_key,
+                notes=notes,
+            )
+        )
+
+    return rows
+
+
+def load_workbook_loader() -> Any | None:
     try:
         import importlib
         _openpyxl = importlib.import_module("openpyxl")
-        _load_workbook = _openpyxl.load_workbook
+        return _openpyxl.load_workbook
     except ModuleNotFoundError:
+        return None
+
+
+@lru_cache(maxsize=1)
+def load_legacy_mapping_rows() -> tuple[str | None, list[MappingRow]]:
+    workbook_path = resolve_single_mapping_workbook_path(LEGACY_MAPPING_WORKBOOK_NAMES)
+    if workbook_path is None:
         return None, []
 
-    workbook = _load_workbook(workbook_path, data_only=True)
+    load_workbook_fn = load_workbook_loader()
+    if load_workbook_fn is None:
+        return None, []
+
+    workbook = load_workbook_fn(workbook_path, data_only=True)
     sheet_name = "Vulcan Mapping" if "Vulcan Mapping" in workbook.sheetnames else workbook.sheetnames[0]
     sheet = workbook[sheet_name]
 
@@ -411,24 +655,33 @@ def load_mapping_rows() -> tuple[str | None, list[MappingRow]]:
 
         rows.append(
             MappingRow(
-                vulcan_setup=vulcan_setup,
-                vulcan_media=vulcan_media,
-                input_profile=input_profile,
-                output_profile=output_profile,
-                atlas_setup=atlas_setup,
-                atlas_media=atlas_media,
-                atlas_output_icc=atlas_output_icc,
-                pallet_mapping=pallet_mapping,
+                workbook_name=workbook_path.name,
+                sheet_name=sheet_name,
+                source_family="vulcan",
+                target_family="atlas",
+                source_setup=vulcan_setup,
+                source_media=vulcan_media,
+                source_input_rgb=input_profile,
+                source_input_cmyk="",
+                source_output_icc=output_profile,
+                target_setup=atlas_setup,
+                target_base_setup=atlas_setup,
+                target_media=atlas_media,
+                target_input_rgb="",
+                target_input_cmyk="",
+                target_output_icc=atlas_output_icc,
+                target_pallet=pallet_mapping,
                 status=status,
                 auto_map_key=auto_map_key,
+                notes="",
             )
         )
 
     return workbook_path.name, rows
 
 
-def find_mapping_row(source_root: ET.Element) -> MappingRow | None:
-    _, rows = load_mapping_rows()
+def find_legacy_mapping_row(source_root: ET.Element) -> MappingRow | None:
+    _, rows = load_legacy_mapping_rows()
     if not rows:
         return None
 
@@ -454,11 +707,11 @@ def find_mapping_row(source_root: ET.Element) -> MappingRow | None:
 
     def field_presence_bonus(row: MappingRow) -> int:
         bonus = 0
-        if normalize_lookup(row.vulcan_setup):
+        if normalize_lookup(row.source_setup):
             bonus += 3
-        if normalize_lookup(row.output_profile):
+        if normalize_lookup(row.source_output_icc):
             bonus += 2
-        if normalize_lookup(row.vulcan_media):
+        if normalize_lookup(row.source_media):
             bonus += 1
         return bonus
 
@@ -466,34 +719,240 @@ def find_mapping_row(source_root: ET.Element) -> MappingRow | None:
     best_score = -1
 
     for row in rows:
-        row_setup_norm = normalize_lookup(row.vulcan_setup)
-        row_media_norm = normalize_lookup(row.vulcan_media)
-        row_input_norm = normalize_lookup(row.input_profile)
-        row_output_norm = normalize_lookup(row.output_profile)
+        row_setup_norm = normalize_lookup(row.source_setup)
+        row_media_norm = normalize_lookup(row.source_media)
+        row_input_norm = normalize_lookup(row.source_input_rgb)
+        row_output_norm = normalize_lookup(row.source_output_icc)
 
         score = 0
 
-        # Setup is the primary key.
+        if row_output_norm and source_output_norm:
+            if row_output_norm == source_output_norm:
+                score += 1200
+            else:
+                score += similarity_score(row.source_output_icc, source_output) * 10
+
         if row_setup_norm and source_setup_norm:
             if row_setup_norm == source_setup_norm:
-                score += 1000
+                score += 700
             else:
-                score += similarity_score(row.vulcan_setup, source_setup) * 8
+                score += similarity_score(row.source_setup, source_setup) * 6
 
-        # Output profile is the second strongest signal.
+        if row_media_norm and source_media_norm:
+            score += similarity_score(row.source_media, source_media) * 3
+
+        if row_input_norm and source_input_norm:
+            score += similarity_score(row.source_input_rgb, source_input)
+
+        score += row_status_priority(row)
+        score += field_presence_bonus(row)
+
+        if score > best_score:
+            best_score = score
+            best_row = row
+
+    if best_score < 120:
+        return None
+
+    return best_row
+
+
+def apply_legacy_mapping_row(target_root: ET.Element, mapping_row: MappingRow | None) -> None:
+    if mapping_row is None:
+        return
+
+    atlas_setup = mapping_row.target_setup or ""
+    atlas_media = mapping_row.target_media or ""
+    atlas_output_icc = mapping_row.target_output_icc or ""
+
+    atlas_media, atlas_output_icc = get_canonical_atlas_targets(
+        atlas_setup,
+        atlas_media,
+        atlas_output_icc,
+    )
+
+    if atlas_setup:
+        replace_simple_text(target_root, "SetApplied", atlas_setup)
+        replace_simple_text(target_root, "LastBaseSetupName", atlas_setup)
+    if atlas_media:
+        replace_simple_text(target_root, "MediaName", atlas_media)
+    if atlas_output_icc:
+        replace_simple_text(target_root, "IccOutFileName", atlas_output_icc)
+    if mapping_row.target_pallet:
+        replace_simple_text(target_root, "TableName", mapping_row.target_pallet)
+
+@lru_cache(maxsize=1)
+def load_mapping_rows() -> tuple[str | None, list[MappingRow]]:
+    workbook_paths = resolve_mapping_workbook_paths()
+    if not workbook_paths:
+        return None, []
+
+    try:
+        import importlib
+        _openpyxl = importlib.import_module("openpyxl")
+        _load_workbook = _openpyxl.load_workbook
+    except ModuleNotFoundError:
+        return None, []
+
+    rows: list[MappingRow] = []
+    workbook_names: list[str] = []
+    for workbook_path in workbook_paths:
+        workbook = _load_workbook(workbook_path, data_only=True)
+        workbook_names.append(workbook_path.name)
+
+        for definition in MAPPING_SHEET_DEFINITIONS:
+            if definition.sheet_name not in workbook.sheetnames:
+                continue
+            rows.extend(
+                collect_mapping_rows_from_sheet(
+                    workbook[definition.sheet_name],
+                    definition,
+                    workbook_path.name,
+                )
+            )
+
+        if not any(row.workbook_name == workbook_path.name for row in rows) and workbook.sheetnames:
+            fallback_sheet = workbook[workbook.sheetnames[0]]
+            rows.extend(
+                collect_mapping_rows_from_sheet(
+                    fallback_sheet,
+                    MappingSheetDefinition(
+                        sheet_name=fallback_sheet.title,
+                        source_family="unknown",
+                        target_family="unknown",
+                        source_setup_headers=("SOURCE_SETUP", "SETUP", "BASE_SETUP"),
+                        source_media_headers=("SOURCE_MEDIA", "MEDIA"),
+                        source_output_headers=("SOURCE_OUTPUT_ICC", "OUTPUT_ICC"),
+                        source_input_rgb_headers=("SOURCE_INPUT_RGB", "INPUT_RGB"),
+                        source_input_cmyk_headers=("SOURCE_INPUT_CMYK", "INPUT_CMYK"),
+                        target_setup_headers=("TARGET_SETUP",),
+                        target_base_setup_headers=("TARGET_BASE_SETUP",),
+                        target_media_headers=("TARGET_MEDIA",),
+                        target_output_headers=("TARGET_OUTPUT_ICC",),
+                        target_input_rgb_headers=("TARGET_INPUT_RGB",),
+                        target_input_cmyk_headers=("TARGET_INPUT_CMYK",),
+                        target_pallet_headers=("TARGET_PALLET", "PALLET_MAPPING"),
+                        status_headers=("STATUS",),
+                        auto_map_key_headers=("AUTO_MAP_KEY",),
+                        notes_headers=("NOTES",),
+                    ),
+                    workbook_path.name,
+                ),
+            )
+
+    return ", ".join(workbook_names), rows
+
+
+def find_mapping_row(
+    source_root: ET.Element,
+    template_root: ET.Element | None = None,
+    expected_source_family: str | None = None,
+    expected_target_family: str | None = None,
+) -> MappingRow | None:
+    _, rows = load_mapping_rows()
+    if not rows:
+        return None
+
+    source_family = expected_source_family or detect_mapping_family(source_root)
+    target_family = expected_target_family or detect_mapping_family(template_root)
+
+    source_setup = get_text(source_root, "SetApplied")
+    source_base_setup = get_text(source_root, "LastBaseSetupName")
+    source_media = get_text(source_root, "MediaName")
+    source_input_rgb = get_text(source_root, "IccInRGBFileName")
+    source_input_cmyk = get_text(source_root, "IccInCMYKFileName")
+    source_output_icc = get_text(source_root, "IccOutFileName")
+
+    source_setup_norm = normalize_lookup(source_setup)
+    source_base_setup_norm = normalize_lookup(source_base_setup)
+    source_media_norm = normalize_lookup(source_media)
+    source_input_rgb_norm = normalize_lookup(source_input_rgb)
+    source_input_cmyk_norm = normalize_lookup(source_input_cmyk)
+    source_output_norm = normalize_lookup(source_output_icc)
+
+    template_base_setup = get_text(template_root, "LastBaseSetupName") if template_root is not None else ""
+    template_media = get_text(template_root, "MediaName") if template_root is not None else ""
+    template_output_icc = get_text(template_root, "IccOutFileName") if template_root is not None else ""
+
+    template_base_setup_norm = normalize_lookup(template_base_setup)
+    template_media_norm = normalize_lookup(template_media)
+    template_output_norm = normalize_lookup(template_output_icc)
+
+    def row_status_priority(row: MappingRow) -> int:
+        status = normalize_lookup(row.status)
+        if status in {"mapped", "maped"}:
+            return 30
+        if status == "fallback":
+            return 20
+        if status == "review":
+            return 10
+        return 0
+
+    def field_presence_bonus(row: MappingRow) -> int:
+        bonus = 0
+        if normalize_lookup(row.source_setup):
+            bonus += 3
+        if normalize_lookup(row.source_output_icc):
+            bonus += 2
+        if normalize_lookup(row.source_media):
+            bonus += 1
+        return bonus
+
+    best_row: MappingRow | None = None
+    best_score = -1
+
+    for row in rows:
+        if not families_are_compatible(source_family, row.source_family):
+            continue
+        if not families_are_compatible(target_family, row.target_family):
+            continue
+
+        row_setup_norm = normalize_lookup(row.source_setup)
+        row_media_norm = normalize_lookup(row.source_media)
+        row_input_rgb_norm = normalize_lookup(row.source_input_rgb)
+        row_input_cmyk_norm = normalize_lookup(row.source_input_cmyk)
+        row_output_norm = normalize_lookup(row.source_output_icc)
+        row_target_base_norm = normalize_lookup(row.target_base_setup or row.target_setup)
+        row_target_media_norm = normalize_lookup(row.target_media)
+        row_target_output_norm = normalize_lookup(row.target_output_icc)
+
+        score = 0
+
+        if row_setup_norm:
+            if source_base_setup_norm and row_setup_norm == source_base_setup_norm:
+                score += 1200
+            elif source_base_setup_norm:
+                score += similarity_score(row.source_setup, source_base_setup) * 10
+
+            if source_setup_norm and row_setup_norm == source_setup_norm:
+                score += 700
+            elif source_setup_norm:
+                score += similarity_score(row.source_setup, source_setup) * 5
+
         if row_output_norm and source_output_norm:
             if row_output_norm == source_output_norm:
                 score += 700
             else:
-                score += similarity_score(row.output_profile, source_output) * 6
+                score += similarity_score(row.source_output_icc, source_output_icc) * 6
 
-        # Media is support only, not a strict horizontal requirement.
         if row_media_norm and source_media_norm:
-            score += similarity_score(row.vulcan_media, source_media) * 3
+            score += similarity_score(row.source_media, source_media) * 4
 
-        # Input profile is a light support signal.
-        if row_input_norm and source_input_norm:
-            score += similarity_score(row.input_profile, source_input)
+        if row_input_rgb_norm and source_input_rgb_norm:
+            score += similarity_score(row.source_input_rgb, source_input_rgb) * 2
+        if row_input_cmyk_norm and source_input_cmyk_norm:
+            score += similarity_score(row.source_input_cmyk, source_input_cmyk)
+
+        if template_root is not None:
+            if row_target_base_norm and template_base_setup_norm:
+                if row_target_base_norm == template_base_setup_norm:
+                    score += 180
+                else:
+                    score += similarity_score(row.target_base_setup or row.target_setup, template_base_setup) * 2
+            if row_target_media_norm and template_media_norm:
+                score += similarity_score(row.target_media, template_media) * 2
+            if row_target_output_norm and template_output_norm:
+                score += similarity_score(row.target_output_icc, template_output_icc) * 2
 
         score += row_status_priority(row)
         score += field_presence_bonus(row)
@@ -512,25 +971,31 @@ def apply_mapping_row(target_root: ET.Element, mapping_row: MappingRow | None) -
     if mapping_row is None:
         return
 
-    atlas_setup = mapping_row.atlas_setup or ""
-    atlas_media = mapping_row.atlas_media or ""
-    atlas_output_icc = mapping_row.atlas_output_icc or ""
+    target_setup = mapping_row.target_setup or mapping_row.target_base_setup or ""
+    target_base_setup = mapping_row.target_base_setup or mapping_row.target_setup or ""
+    target_media = mapping_row.target_media or ""
+    target_output_icc = mapping_row.target_output_icc or ""
 
-    atlas_media, atlas_output_icc = get_canonical_atlas_targets(
-        atlas_setup,
-        atlas_media,
-        atlas_output_icc,
+    target_media, target_output_icc = get_canonical_atlas_targets(
+        target_base_setup,
+        target_media,
+        target_output_icc,
     )
 
-    if atlas_setup:
-        replace_simple_text(target_root, "SetApplied", atlas_setup)
-        replace_simple_text(target_root, "LastBaseSetupName", atlas_setup)
-    if atlas_media:
-        replace_simple_text(target_root, "MediaName", atlas_media)
-    if atlas_output_icc:
-        replace_simple_text(target_root, "IccOutFileName", atlas_output_icc)
-    if mapping_row.pallet_mapping:
-        replace_simple_text(target_root, "TableName", mapping_row.pallet_mapping)
+    if target_setup:
+        replace_simple_text(target_root, "SetApplied", target_setup)
+    if target_base_setup:
+        replace_simple_text(target_root, "LastBaseSetupName", target_base_setup)
+    if target_media:
+        replace_simple_text(target_root, "MediaName", target_media)
+    if target_output_icc:
+        replace_simple_text(target_root, "IccOutFileName", target_output_icc)
+    if mapping_row.target_input_rgb:
+        replace_simple_text(target_root, "IccInRGBFileName", mapping_row.target_input_rgb)
+    if mapping_row.target_input_cmyk:
+        replace_simple_text(target_root, "IccInCMYKFileName", mapping_row.target_input_cmyk)
+    if mapping_row.target_pallet:
+        replace_simple_text(target_root, "TableName", mapping_row.target_pallet)
 
 
 def parse_ksf_bytes(data: bytes) -> ET.Element:
@@ -543,6 +1008,52 @@ def get_text(root: ET.Element, tag: str) -> str:
 
 def normalize(text: str) -> str:
     return " ".join(text.lower().replace("_", " ").replace("-", " ").split())
+
+
+def detect_mapping_family(root: ET.Element | None) -> str | None:
+    if root is None:
+        return None
+
+    media_name = normalize(get_text(root, "MediaName"))
+    set_applied = normalize(get_text(root, "SetApplied"))
+    last_base_setup_name = normalize(get_text(root, "LastBaseSetupName"))
+    icc_out = normalize(get_text(root, "IccOutFileName"))
+    table_name = normalize(get_text(root, "TableName"))
+    machine_type = normalize(get_text(root, "MachineType"))
+
+    haystack = " ".join(
+        [
+            media_name,
+            set_applied,
+            last_base_setup_name,
+            icc_out,
+            table_name,
+            machine_type,
+        ]
+    )
+
+    if "atlas max poly" in haystack or "maxpoly" in haystack or "atl poly" in haystack:
+        return "poly"
+    if "atlas max+" in haystack or "atlas max plus" in haystack:
+        return "plus"
+    if "vulcan" in haystack:
+        return "vulcan"
+    if "atlas" in haystack:
+        return "atlas"
+    return None
+
+
+def families_are_compatible(detected_family: str | None, row_family: str) -> bool:
+    if not detected_family or row_family == "unknown":
+        return True
+    if detected_family == row_family:
+        return True
+
+    compatible_families = {
+        "atlas": {"atlas", "plus"},
+        "plus": {"plus", "atlas"},
+    }
+    return row_family in compatible_families.get(detected_family, {detected_family})
 
 
 def infer_atlas_setup_key(root: ET.Element) -> str | None:
@@ -637,6 +1148,7 @@ def detect_profile(root: ET.Element) -> dict:
         "mapped_atlas_setup": "",
         "mapped_atlas_media": "",
         "mapped_atlas_output_icc": "",
+        "mapped_atlas_input_rgb": "",
     }
     haystack = normalize(
         " ".join(
@@ -798,6 +1310,42 @@ def apply_special_separation_rules(target_root: ET.Element) -> None:
         replace_simple_text(model, "IsMaxCoverage", config["is_max_coverage"])
 
 
+def apply_cross_special_separation_rules(source_root: ET.Element, target_root: ET.Element) -> None:
+    source_specials = source_root.find("SpecialSeparations")
+    target_specials = target_root.find("SpecialSeparations")
+    if target_specials is None:
+        return
+
+    source_models = {}
+    if source_specials is not None:
+        source_models = {
+            (model.findtext("Name", default="").strip()): model
+            for model in source_specials.findall("SpecialSepModel")
+        }
+
+    target_models = {
+        (model.findtext("Name", default="").strip()): model
+        for model in target_specials.findall("SpecialSepModel")
+    }
+
+    for name in ("Qw", "Qc"):
+        source_model = source_models.get(name)
+        target_model = target_models.get(name)
+        if source_model is None or target_model is None:
+            continue
+        for tag in ("Enable", "Solid", "MaxCoverage", "IsMaxCoverage"):
+            value = get_text(source_model, tag)
+            if value:
+                replace_simple_text(target_model, tag, value)
+
+    pe_model = target_models.get("PE")
+    if pe_model is not None:
+        replace_simple_text(pe_model, "Enable", "true")
+        replace_simple_text(pe_model, "Solid", "0")
+        replace_simple_text(pe_model, "MaxCoverage", "40")
+        replace_simple_text(pe_model, "IsMaxCoverage", "true")
+
+
 def format_number(value: float, original_text: str | None) -> str:
     if original_text and "." in original_text:
         decimals = len(original_text.split(".")[-1])
@@ -856,16 +1404,14 @@ def build_converted_root(
     if copies_mode == "source":
         preserve_copies(source_root, target_root)
 
-    mapping_row = find_mapping_row(source_root)
+    mapping_row = find_legacy_mapping_row(source_root)
     if mapping_row is not None:
-        apply_mapping_row(target_root, mapping_row)
+        apply_legacy_mapping_row(target_root, mapping_row)
     else:
         atlas_setup_key = infer_atlas_setup_key(source_root)
         apply_atlas_setup_mapping(target_root, atlas_setup_key)
-    apply_special_separation_rules(target_root)
-
-    if set_name_mode == "source-file":
-        replace_simple_text(target_root, "SetApplied", output_stem)
+    replace_simple_text(target_root, "IccInRGBFileName", "None")
+    replace_simple_text(target_root, "IccInCMYKFileName", "None")
 
     apply_offset_delta(target_root, x_delta, y_delta)
     sync_strip_geometry_from_root(target_root)
@@ -908,7 +1454,7 @@ def convert_one(
 def build_preview(files: list[SourceItem], template_name: str, template_bytes: bytes) -> dict:
     template_root = parse_ksf_bytes(template_bytes)
     template_info = detect_profile(template_root)
-    mapping_workbook_name, _ = load_mapping_rows()
+    mapping_workbook_name, _ = load_legacy_mapping_rows()
 
     items = []
     for item in files:
@@ -916,13 +1462,13 @@ def build_preview(files: list[SourceItem], template_name: str, template_bytes: b
         try:
             root = parse_ksf_bytes(item.data)
             source_info = detect_profile(root)
-            mapping_row = find_mapping_row(root)
+            mapping_row = find_legacy_mapping_row(root)
             if mapping_row is not None:
                 source_info["mapping_status"] = mapping_row.status or "mapped"
                 source_info["mapping_source"] = mapping_workbook_name or "mapping workbook"
-                source_info["mapped_atlas_setup"] = mapping_row.atlas_setup
-                source_info["mapped_atlas_media"] = mapping_row.atlas_media
-                source_info["mapped_atlas_output_icc"] = mapping_row.atlas_output_icc
+                source_info["mapped_atlas_setup"] = mapping_row.target_setup
+                source_info["mapped_atlas_media"] = mapping_row.target_media
+                source_info["mapped_atlas_output_icc"] = mapping_row.target_output_icc
             else:
                 source_info["mapping_status"] = "review"
                 source_info["mapping_source"] = "no spreadsheet match"
@@ -984,6 +1530,180 @@ def convert_sources(
             converted_root = build_converted_root(
                 source_root=source_root,
                 template_tree=template_tree,
+                geometry_mode=geometry_mode,
+                copies_mode=copies_mode,
+                set_name_mode=set_name_mode,
+                output_stem=output_path.stem,
+                x_delta=x_delta,
+                y_delta=y_delta,
+            )
+            results.append(
+                ConvertedItem(
+                    relative_path=source.relative_path,
+                    output_path=output_path,
+                    data=serialize_xml(converted_root),
+                    status="converted",
+                    error=None,
+                )
+            )
+        except Exception as exc:
+            results.append(
+                ConvertedItem(
+                    relative_path=source.relative_path,
+                    output_path=output_path,
+                    data=None,
+                    status="error",
+                    error=str(exc),
+                )
+            )
+
+    return results
+
+
+def build_converted_root_cross(
+    source_root: ET.Element,
+    template_tree: ET.ElementTree,
+    direction: str,
+    geometry_mode: str,
+    copies_mode: str,
+    set_name_mode: str,
+    output_stem: str,
+    x_delta: float,
+    y_delta: float,
+) -> ET.Element:
+    target_root = cast(ET.Element, copy.deepcopy(template_tree.getroot()))
+    white_support_type = target_root.attrib.get("WhiteSupportType", "WBCICC")
+    target_root.attrib.clear()
+    for key, value in ROOT_ATTRS.items():
+        target_root.set(key, value)
+    target_root.set("WhiteSupportType", white_support_type)
+
+    for tag in SOURCE_PASSTHROUGH_TAGS:
+        source_node = source_root.find(tag)
+        if source_node is not None:
+            replace_existing_only(target_root, source_node)
+
+    if geometry_mode == "source":
+        preserve_geometry(source_root, target_root)
+        sync_strip_geometry_from_root(target_root)
+
+    if copies_mode == "source":
+        preserve_copies(source_root, target_root)
+
+    expected_source_family = "plus" if direction == "plus_to_poly" else "poly"
+    expected_target_family = "poly" if direction == "plus_to_poly" else "plus"
+    mapping_row = find_mapping_row(
+        source_root,
+        target_root,
+        expected_source_family=expected_source_family,
+        expected_target_family=expected_target_family,
+    )
+    if mapping_row is not None:
+        apply_mapping_row(target_root, mapping_row)
+
+    apply_cross_special_separation_rules(source_root, target_root)
+
+    if set_name_mode == "source-file":
+        replace_simple_text(target_root, "SetApplied", output_stem)
+
+    apply_offset_delta(target_root, x_delta, y_delta)
+    sync_strip_geometry_from_root(target_root)
+    return target_root
+
+
+def build_preview_cross(
+    files: list[SourceItem],
+    template_name: str,
+    template_bytes: bytes,
+    direction: str,
+) -> dict:
+    template_root = parse_ksf_bytes(template_bytes)
+    template_info = detect_profile(template_root)
+    mapping_workbook_name, _ = load_mapping_rows()
+    expected_source_family = "plus" if direction == "plus_to_poly" else "poly"
+    expected_target_family = "poly" if direction == "plus_to_poly" else "plus"
+
+    items = []
+    for item in files:
+        filename = item.relative_path.as_posix()
+        try:
+            root = parse_ksf_bytes(item.data)
+            source_info = detect_profile(root)
+            mapping_row = find_mapping_row(
+                root,
+                template_root,
+                expected_source_family=expected_source_family,
+                expected_target_family=expected_target_family,
+            )
+            if mapping_row is not None:
+                source_info["mapping_status"] = mapping_row.status or "mapped"
+                source_info["mapping_source"] = f"{mapping_row.workbook_name} / {mapping_row.sheet_name}"
+                source_info["mapped_atlas_setup"] = mapping_row.target_base_setup or mapping_row.target_setup
+                source_info["mapped_atlas_media"] = mapping_row.target_media
+                source_info["mapped_atlas_output_icc"] = mapping_row.target_output_icc
+                source_info["mapped_atlas_input_rgb"] = mapping_row.target_input_rgb
+            else:
+                source_info["mapping_status"] = "review"
+                source_info["mapping_source"] = mapping_workbook_name or "no spreadsheet match"
+                source_info["mapped_atlas_setup"] = ""
+                source_info["mapped_atlas_media"] = ""
+                source_info["mapped_atlas_output_icc"] = ""
+                source_info["mapped_atlas_input_rgb"] = ""
+
+            items.append(
+                {
+                    "filename": filename,
+                    "origin": item.origin,
+                    "status": "ready",
+                    "source": source_info,
+                    "template": template_info,
+                    "warnings": compare_with_template(source_info, template_info),
+                    "error": None,
+                }
+            )
+        except ET.ParseError as exc:
+            items.append(
+                {
+                    "filename": filename,
+                    "origin": item.origin,
+                    "status": "error",
+                    "source": None,
+                    "template": template_info,
+                    "warnings": [],
+                    "error": f"Invalid XML in source file: {exc}",
+                }
+            )
+
+    return {
+        "template_filename": template_name,
+        "template": template_info,
+        "mapping_workbook": mapping_workbook_name,
+        "items": items,
+    }
+
+
+def convert_sources_cross(
+    source_parts: list[SourceItem],
+    template_bytes: bytes,
+    direction: str,
+    geometry_mode: str,
+    copies_mode: str,
+    set_name_mode: str,
+    x_delta: float,
+    y_delta: float,
+) -> list[ConvertedItem]:
+    template_root = parse_ksf_bytes(template_bytes)
+    template_tree = ET.ElementTree(template_root)
+    results: list[ConvertedItem] = []
+
+    for source in source_parts:
+        output_path = Path("converted") / source.relative_path.name
+        try:
+            source_root = parse_ksf_bytes(source.data)
+            converted_root = build_converted_root_cross(
+                source_root=source_root,
+                template_tree=template_tree,
+                direction=direction,
                 geometry_mode=geometry_mode,
                 copies_mode=copies_mode,
                 set_name_mode=set_name_mode,
@@ -1079,7 +1799,7 @@ def render_kpis(source_parts: list[SourceItem], template_name: str | None, previ
             st.metric("Warnings", warnings_count + invalid_count)
 
 
-def render_preview(preview: dict) -> None:
+def render_preview_legacy(preview: dict) -> None:
     priority_warnings = [
         (item["filename"], warning)
         for item in preview["items"]
@@ -1127,7 +1847,7 @@ def render_preview(preview: dict) -> None:
                         f"Mapped Atlas setup: `{item['source'].get('mapped_atlas_setup') or 'N/A'}`  \n"
                         f"Mapped Atlas media: `{item['source'].get('mapped_atlas_media') or 'N/A'}`  \n"
                         f"Mapped Atlas output ICC: `{item['source'].get('mapped_atlas_output_icc') or 'N/A'}`  \n"
-                        "Matching priority: Vulcan setup first, output profile second, Vulcan media as support, and input profile as a light support signal. The spreadsheet is not treated as a strict horizontal all-fields-must-match rule. Special separations in the output are forced to: Qc = 25 solid, Qw = 65 max coverage, Iw = 25 solid, Ic = 25 solid."
+                        "Matching priority: Vulcan output ICC first, setup second, Vulcan media as support, and input profile as a light support signal. The spreadsheet is not treated as a strict horizontal all-fields-must-match rule. Special separations in the output are forced to: Qc = 25 solid, Qw = 65 max coverage, Iw = 25 solid, Ic = 25 solid."
                     )
                 with top_b:
                     st.metric("Mapping status", (item["source"].get("mapping_status") or "review").upper())
@@ -1135,6 +1855,88 @@ def render_preview(preview: dict) -> None:
                         f"Atlas setup: {item['source'].get('mapped_atlas_setup') or 'N/A'} | "
                         f"Atlas media: {item['source'].get('mapped_atlas_media') or 'N/A'} | "
                         f"Atlas output ICC: {item['source'].get('mapped_atlas_output_icc') or 'N/A'}"
+                    )
+
+                st.caption(
+                    f"X: {item['source']['x_offset'] or 'N/A'} | "
+                    f"Y: {item['source']['y_offset'] or 'N/A'} | "
+                    f"Spray: {item['source']['spray_amount'] or 'N/A'} | "
+                    f"Linear Spray: {item['source']['linear_spray_amount'] or 'N/A'} | "
+                    f"MaxOpacity: {item['source']['max_opacity'] or 'N/A'} | "
+                    f"MinOpacity: {item['source']['min_opacity'] or 'N/A'} | "
+                    f"ChokeWhitePixels: {item['source']['choke_white_pixels'] or 'N/A'} | "
+                    f"HighlightOpacity: {item['source']['highlight_opacity'] or 'N/A'} | "
+                    f"PrintSpeed: {item['source']['print_speed'] or 'N/A'} | "
+                    f"PrintDirection: {item['source']['print_direction'] or 'N/A'}"
+                )
+
+                if item["warnings"]:
+                    for warning in item["warnings"]:
+                        st.warning(warning)
+                else:
+                    st.success("Spreadsheet mapping found. Conversion is ready for initial testing with preserved source coordinates and other compatible variable values.")
+
+
+def render_preview_cross(preview: dict) -> None:
+    priority_warnings = [
+        (item["filename"], warning)
+        for item in preview["items"]
+        for warning in item["warnings"]
+    ]
+    invalid_count = sum(1 for item in preview["items"] if item["status"] == "error")
+    summary_parts = [f"{len(preview['items'])} file(s) analyzed"]
+    if priority_warnings:
+        summary_parts.append(f"{len(priority_warnings)} warning(s)")
+    if invalid_count:
+        summary_parts.append(f"{invalid_count} invalid file(s)")
+
+    with st.expander(f"Operational review and analyzed files ({' | '.join(summary_parts)})", expanded=False):
+        st.subheader("Operational review")
+        if preview.get("mapping_workbook"):
+            st.caption(f"Mapping workbook: {preview['mapping_workbook']}")
+        else:
+            st.caption("Mapping workbook: unavailable because openpyxl is not installed or no workbook was found.")
+        template = preview["template"]
+        st.caption(
+            f"Output template: {template['media_name'] or 'N/A'} | "
+            f"Setup: {template['last_base_setup_name'] or template['set_applied'] or 'N/A'}"
+        )
+
+        if priority_warnings:
+            for filename, warning in priority_warnings:
+                st.warning(f"{filename}: {warning}")
+        else:
+            st.success("No critical warnings detected in the initial analysis.")
+
+        st.subheader("Analyzed files")
+        for item in preview["items"]:
+            with st.container(border=True):
+                top_a, top_b = st.columns([2.2, 1])
+                with top_a:
+                    st.markdown(f"**{item['filename']}**")
+                    st.caption(f"Input mode: {item['origin'].upper()}")
+                    if item["status"] == "error":
+                        st.error(item["error"])
+                        continue
+                    st.write(
+                        f"Source base setup: `{item['source']['last_base_setup_name'] or 'N/A'}`  \n"
+                        f"Source media: `{item['source']['media_name'] or 'N/A'}`  \n"
+                        f"Source output ICC: `{item['source']['icc_out'] or 'N/A'}`  \n"
+                        f"Source input RGB: `{item['source']['icc_in_rgb'] or 'N/A'}`  \n"
+                        f"Mapping source: `{item['source'].get('mapping_source') or 'N/A'}`  \n"
+                        f"Mapped target setup: `{item['source'].get('mapped_atlas_setup') or 'N/A'}`  \n"
+                        f"Mapped target media: `{item['source'].get('mapped_atlas_media') or 'N/A'}`  \n"
+                        f"Mapped target output ICC: `{item['source'].get('mapped_atlas_output_icc') or 'N/A'}`  \n"
+                        f"Mapped target input RGB: `{item['source'].get('mapped_atlas_input_rgb') or 'N/A'}`  \n"
+                        "Cross-conversion mapping follows the workbook entries. Matching priority is: Base Setup first, Media second, Output ICC third, and Input RGB as a support signal. When one reliable match identifies the row, the app applies the full mapped target package from that spreadsheet row."
+                    )
+                with top_b:
+                    st.metric("Mapping status", (item["source"].get("mapping_status") or "review").upper())
+                    st.caption(
+                        f"Target setup: {item['source'].get('mapped_atlas_setup') or 'N/A'} | "
+                        f"Target media: {item['source'].get('mapped_atlas_media') or 'N/A'} | "
+                        f"Target output ICC: {item['source'].get('mapped_atlas_output_icc') or 'N/A'} | "
+                        f"Target input RGB: {item['source'].get('mapped_atlas_input_rgb') or 'N/A'}"
                     )
 
                 st.caption(
@@ -1172,6 +1974,314 @@ def render_conversion_results(converted_items: list[ConvertedItem], report: dict
                 st.caption(f"And {len(failed_items) - 10} more failed file(s). Check `conversion-report.json` inside the ZIP.")
     else:
         st.success("All files were converted successfully. Download the ZIP package below.")
+
+
+def render_conversion_workspace(
+    *,
+    session_prefix: str,
+    template_heading: str,
+    template_toggle_label: str,
+    template_upload_caption: str,
+    template_upload_label: str,
+    source_caption: str,
+    source_label: str,
+    workflow_info: str,
+    analyze_error: str,
+    build_preview_fn: Any,
+    convert_sources_fn: Any,
+    render_preview_fn: Any,
+    theme: str = "legacy",
+    direction_options: list[tuple[str, str]] | None = None,
+) -> None:
+    geometry_mode = "source"
+    copies_mode = "source"
+    set_name_mode = "template"
+    x_delta = 0.0
+    y_delta = 0.0
+
+    default_template_name, default_template_bytes = load_default_template_bytes()
+    uploader_nonce_key = f"{session_prefix}_uploader_nonce"
+    uploader_nonce = st.session_state.setdefault(uploader_nonce_key, 0)
+
+    section_card_class = "section-card cross-section-card" if theme == "cross" else "section-card"
+    workspace_class = "cross-workspace" if theme == "cross" else "legacy-workspace"
+    if theme == "cross":
+        st.markdown(
+            """
+            <div class="cross-hero">
+                <div class="cross-hero-kicker">Dedicated Cross-Mapping Workspace</div>
+                <div class="cross-hero-title">Atlas Max+ <-> Poly Mapping Station</div>
+                <div class="cross-hero-copy">
+                    Spreadsheet-driven conversion for stable setup/media/ICC mappings. This workspace is isolated
+                    from the approved Vulcan flow and is meant for directional mapping validation and controlled rollout.
+                </div>
+                <div class="cross-chip-row">
+                    <span class="cross-chip">Base Setup Priority</span>
+                    <span class="cross-chip">Media Fallback</span>
+                    <span class="cross-chip">ICC-Led Recovery</span>
+                    <span class="cross-chip">Template-Safe Output</span>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(f"<div class='{workspace_class}'>", unsafe_allow_html=True)
+
+    direction_value: str | None = None
+    if direction_options:
+        direction_labels = [label for label, _ in direction_options]
+        direction_map = {label: value for label, value in direction_options}
+        st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
+        st.subheader("Conversion direction")
+        selected_direction_label = st.radio(
+            "Direction",
+            options=direction_labels,
+            horizontal=True,
+            key=f"{session_prefix}_direction",
+            label_visibility="collapsed",
+        )
+        direction_value = direction_map[selected_direction_label]
+        st.caption(
+            "Select the conversion direction explicitly so the app uses the correct spreadsheet side and expected output template."
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    active_template_heading = template_heading
+    active_template_toggle_label = template_toggle_label
+    active_template_upload_caption = template_upload_caption
+    active_template_upload_label = template_upload_label
+    active_source_caption = source_caption
+    active_source_label = source_label
+    active_workflow_info = workflow_info
+    active_default_template_name = default_template_name
+    active_default_template_bytes = default_template_bytes
+
+    if theme == "cross" and direction_value == "plus_to_poly":
+        active_template_heading = "Poly output template"
+        active_template_toggle_label = "Use built-in Poly output template"
+        active_template_upload_caption = "Upload a Poly KSF output template."
+        active_template_upload_label = "Poly output template"
+        active_source_caption = "Upload one or more Atlas Max+ KSF files to convert into Poly."
+        active_source_label = "Atlas Max+ source files"
+        active_workflow_info = (
+            "Direction selected: Plus -> Poly. The app reads Atlas Max+ source fields and searches the "
+            "Plus_to_Poly_Mapping sheet by Base Setup first, Media second, Output ICC third, and Input RGB as "
+            "a support signal. Once a reliable match is found, the full Poly target package from that row is applied."
+        )
+        active_default_template_name, active_default_template_bytes = load_preferred_template_bytes(
+            PREFERRED_CROSS_TEMPLATE_NAMES["plus_to_poly"]
+        )
+    elif theme == "cross" and direction_value == "poly_to_plus":
+        active_template_heading = "Atlas Max+ output template"
+        active_template_toggle_label = "Use built-in Atlas Max+ output template"
+        active_template_upload_caption = "Upload an Atlas Max+ KSF output template."
+        active_template_upload_label = "Atlas Max+ output template"
+        active_source_caption = "Upload one or more Poly KSF files to convert into Atlas Max+."
+        active_source_label = "Poly source files"
+        active_workflow_info = (
+            "Direction selected: Poly -> Plus. The app reads Poly source fields and searches the "
+            "Poly_to_Plus_Mapping sheet by Base Setup first, Media second, Output ICC third, and Input RGB as "
+            "a support signal. Once a reliable match is found, the full Atlas Max+ target package from that row is applied."
+        )
+        active_default_template_name, active_default_template_bytes = load_preferred_template_bytes(
+            PREFERRED_CROSS_TEMPLATE_NAMES["poly_to_plus"]
+        )
+
+    top_left, top_right = st.columns([1.5, 1])
+    with top_left:
+        st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
+        st.subheader("Source files")
+        input_mode = st.radio(
+            "Input mode",
+            options=["Single files", "ZIP", "Mixed"],
+            horizontal=True,
+            key=f"{session_prefix}_input_mode",
+        )
+        st.caption(
+            "Single files: upload one or more `.ksf` files directly. "
+            "ZIP: upload a `.zip` and scan all `.ksf` files inside it recursively. "
+            "Mixed: combine direct `.ksf` uploads with `.zip` packages in the same batch."
+        )
+        source_uploads = None
+        zip_uploads = None
+        if input_mode in {"Single files", "Mixed"}:
+            st.caption(active_source_caption)
+            source_uploads = st.file_uploader(
+                active_source_label,
+                type=["ksf"],
+                accept_multiple_files=True,
+                label_visibility="collapsed",
+                key=f"{session_prefix}_source_ksf_{uploader_nonce}",
+            )
+        if input_mode in {"ZIP", "Mixed"}:
+            st.caption("Upload one or more ZIP files. The app scans recursively for `.ksf` files.")
+            zip_uploads = st.file_uploader(
+                "ZIP source packages",
+                type=["zip"],
+                accept_multiple_files=True,
+                label_visibility="collapsed",
+                key=f"{session_prefix}_source_zip_{uploader_nonce}",
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
+    with top_right:
+        st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
+        st.subheader(active_template_heading)
+        use_default_template = st.toggle(
+            active_template_toggle_label,
+            value=active_default_template_bytes is not None,
+            help="If enabled, the app looks for the preferred built-in template for the selected direction inside templates/.",
+            key=f"{session_prefix}_use_default_template",
+        )
+
+        template_upload = None
+        if use_default_template:
+            if active_default_template_bytes is not None:
+                st.success(f"Built-in template loaded: {active_default_template_name}")
+            else:
+                st.warning(
+                    "Built-in template for the selected direction was not found inside templates/. Upload the correct output template manually."
+                )
+        else:
+            st.caption(active_template_upload_caption)
+            template_upload = st.file_uploader(
+                active_template_upload_label,
+                type=["ksf"],
+                accept_multiple_files=False,
+                label_visibility="collapsed",
+                key=f"{session_prefix}_template_{uploader_nonce}",
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    source_parts: list[SourceItem] = []
+    source_collection_issues: list[str] = []
+    source_error: str | None = None
+    try:
+        source_parts, source_collection_issues = collect_source_items(source_uploads, zip_uploads)
+    except zipfile.BadZipFile:
+        source_error = "One of the uploaded ZIP files is invalid or corrupted."
+    else:
+        source_error = detect_missing_source_error(source_uploads, zip_uploads, source_parts)
+
+    if use_default_template and active_default_template_bytes is not None:
+        template_name = active_default_template_name
+        template_bytes = active_default_template_bytes
+    else:
+        template_name = template_upload.name if template_upload else None
+        template_bytes = template_upload.getvalue() if template_upload else None
+
+    preview_key = f"{session_prefix}_preview"
+    converted_items_key = f"{session_prefix}_converted_items"
+    conversion_report_key = f"{session_prefix}_conversion_report"
+    zip_bytes_key = f"{session_prefix}_zip_bytes"
+
+    render_kpis(source_parts, template_name, st.session_state.get(preview_key))
+
+    st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
+    st.subheader("Conversion workflow")
+    st.info(active_workflow_info)
+    st.caption("Output is always generated as a single ZIP package with the converted KSF files and `conversion-report.json`.")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    action_a, action_b, action_c = st.columns([1, 1.2, 0.8])
+    with action_a:
+        analyze_clicked = st.button("Analyze files", use_container_width=True, key=f"{session_prefix}_analyze")
+    with action_b:
+        convert_clicked = st.button("Convert and export ZIP", type="primary", use_container_width=True, key=f"{session_prefix}_convert")
+    with action_c:
+        clear_clicked = st.button("Clear", use_container_width=True, key=f"{session_prefix}_clear")
+
+    if clear_clicked:
+        for key in [preview_key, converted_items_key, conversion_report_key, zip_bytes_key]:
+            st.session_state.pop(key, None)
+        st.session_state[uploader_nonce_key] = uploader_nonce + 1
+        safe_rerun()
+
+    if source_error:
+        st.error(source_error)
+    for issue in source_collection_issues:
+        st.error(issue)
+
+    if analyze_clicked:
+        if not source_parts or not template_bytes:
+            if not source_parts and source_error:
+                st.error(source_error)
+            else:
+                st.error(analyze_error)
+        else:
+            resolved_template_name = template_name or "atlas-template.ksf"
+            if direction_value is None:
+                st.session_state[preview_key] = build_preview_fn(source_parts, resolved_template_name, template_bytes)
+            else:
+                st.session_state[preview_key] = build_preview_fn(
+                    source_parts,
+                    resolved_template_name,
+                    template_bytes,
+                    direction_value,
+                )
+
+    preview = st.session_state.get(preview_key)
+    if preview:
+        render_preview_fn(preview)
+
+    if convert_clicked:
+        if not source_parts or not template_bytes:
+            if not source_parts and source_error:
+                st.error(source_error)
+            else:
+                st.error(analyze_error)
+        else:
+            resolved_template_name = template_name or "atlas-template.ksf"
+            if direction_value is None:
+                preview = build_preview_fn(source_parts, resolved_template_name, template_bytes)
+            else:
+                preview = build_preview_fn(
+                    source_parts,
+                    resolved_template_name,
+                    template_bytes,
+                    direction_value,
+                )
+            st.session_state[preview_key] = preview
+            convert_kwargs = dict(
+                source_parts=source_parts,
+                template_bytes=template_bytes,
+                geometry_mode=geometry_mode,
+                copies_mode=copies_mode,
+                set_name_mode=set_name_mode,
+                x_delta=float(x_delta),
+                y_delta=float(y_delta),
+            )
+            if direction_value is not None:
+                convert_kwargs["direction"] = direction_value
+            converted_items = convert_sources_fn(**convert_kwargs)
+            report = build_conversion_report(preview, converted_items)
+            st.session_state[converted_items_key] = converted_items
+            st.session_state[conversion_report_key] = report
+            st.session_state[zip_bytes_key] = generate_zip_bundle(converted_items, report)
+            success_count = sum(1 for item in converted_items if item.status == "converted")
+            error_count = sum(1 for item in converted_items if item.status == "error")
+            if success_count:
+                st.success(f"Conversion completed. Success: {success_count} | Failed: {error_count}")
+            else:
+                st.error("No files were converted successfully.")
+
+    zip_bytes = st.session_state.get(zip_bytes_key)
+    if zip_bytes:
+        st.download_button(
+            "Download atlas-max-converted.zip",
+            data=zip_bytes,
+            file_name="atlas-max-converted.zip",
+            mime="application/zip",
+            use_container_width=True,
+            key=f"{session_prefix}_download",
+        )
+
+    converted_items = st.session_state.get(converted_items_key)
+    report = st.session_state.get(conversion_report_key)
+    if converted_items and report:
+        render_conversion_results(converted_items, report)
+
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def main() -> None:
@@ -1229,6 +2339,118 @@ def main() -> None:
             box-shadow: 0 14px 34px rgba(95, 106, 138, 0.08);
             margin-bottom: 1rem;
             backdrop-filter: blur(8px);
+        }
+        .cross-section-card {
+            background:
+                linear-gradient(180deg, rgba(244, 251, 253, 0.95) 0%, rgba(234, 245, 249, 0.82) 100%);
+            border: 1px solid rgba(64, 123, 142, 0.20);
+            box-shadow: 0 16px 34px rgba(49, 86, 108, 0.10);
+        }
+        .cross-hero {
+            background:
+                radial-gradient(circle at 12% 18%, rgba(135, 215, 228, 0.18), transparent 24%),
+                radial-gradient(circle at 84% 30%, rgba(255, 210, 143, 0.16), transparent 26%),
+                linear-gradient(135deg, rgba(18, 60, 78, 0.96) 0%, rgba(24, 86, 97, 0.94) 54%, rgba(40, 112, 118, 0.92) 100%);
+            border: 1px solid rgba(89, 169, 186, 0.22);
+            border-radius: 26px;
+            padding: 1.3rem 1.4rem;
+            box-shadow: 0 22px 40px rgba(31, 67, 82, 0.18);
+            margin-bottom: 1rem;
+            position: relative;
+            overflow: hidden;
+        }
+        .cross-hero-kicker {
+            display: inline-block;
+            padding: 0.26rem 0.6rem;
+            border-radius: 999px;
+            background: rgba(216, 244, 248, 0.14);
+            border: 1px solid rgba(216, 244, 248, 0.18);
+            color: #d9f4f8;
+            font-size: 0.78rem;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            margin-bottom: 0.65rem;
+        }
+        .cross-hero-title {
+            color: #f4fbfc;
+            font-size: 1.9rem;
+            font-weight: 700;
+            letter-spacing: -0.03em;
+            margin-bottom: 0.35rem;
+        }
+        .cross-hero-copy {
+            color: rgba(233, 246, 248, 0.88);
+            max-width: 760px;
+            line-height: 1.58;
+            margin-bottom: 0.9rem;
+        }
+        .cross-chip-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.55rem;
+        }
+        .cross-chip {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.34rem 0.7rem;
+            border-radius: 999px;
+            background: rgba(246, 252, 253, 0.12);
+            border: 1px solid rgba(246, 252, 253, 0.16);
+            color: #f1fbfd;
+            font-size: 0.82rem;
+            font-weight: 600;
+            letter-spacing: 0.01em;
+        }
+        .cross-workspace div[data-testid="stMetric"] {
+            background:
+                linear-gradient(160deg, rgba(227, 244, 247, 0.96) 0%, rgba(212, 236, 241, 0.92) 100%);
+            border: 1px solid rgba(80, 135, 152, 0.18);
+            box-shadow: 0 14px 28px rgba(50, 93, 109, 0.10);
+        }
+        .cross-workspace div[data-testid="stAlert"] {
+            border-color: rgba(76, 134, 152, 0.20);
+            box-shadow: 0 14px 26px rgba(46, 87, 102, 0.08);
+        }
+        .cross-workspace div[data-testid="stButton"] > button {
+            background: linear-gradient(180deg, #1f7582 0%, #175966 100%);
+            color: #eef9fb;
+            border-color: rgba(28, 95, 107, 0.32);
+            box-shadow: 0 14px 26px rgba(28, 84, 95, 0.18);
+        }
+        .cross-workspace div[data-testid="stButton"] > button[kind="primary"] {
+            background: linear-gradient(180deg, #f4c66f 0%, #dfa24e 100%);
+            color: #553b0f;
+            border-color: rgba(148, 104, 39, 0.26);
+        }
+        .cross-workspace div[data-testid="stDownloadButton"] > button {
+            background: linear-gradient(180deg, #c5ece4 0%, #9fd7cb 100%);
+            color: #194c48;
+            border-color: rgba(60, 132, 122, 0.20);
+            box-shadow: 0 14px 26px rgba(54, 113, 106, 0.14);
+        }
+        .cross-workspace div[data-testid="stButton"] > button:hover,
+        .cross-workspace div[data-testid="stDownloadButton"] > button:hover {
+            filter: saturate(1.06) brightness(1.01);
+            box-shadow: 0 18px 30px rgba(31, 78, 89, 0.18);
+        }
+        .cross-workspace div[data-testid="stFileUploader"] {
+            background:
+                linear-gradient(180deg, rgba(243, 251, 252, 0.92) 0%, rgba(232, 246, 248, 0.82) 100%);
+            border-color: rgba(70, 126, 145, 0.28);
+        }
+        .cross-workspace div[data-testid="stExpander"] {
+            border: 1px solid rgba(83, 138, 156, 0.18);
+            box-shadow: 0 14px 28px rgba(52, 92, 109, 0.08);
+            background: linear-gradient(180deg, rgba(248, 252, 253, 0.90) 0%, rgba(239, 247, 249, 0.88) 100%);
+        }
+        .cross-workspace div[data-testid="stMarkdownContainer"] code {
+            background: rgba(26, 87, 97, 0.08);
+            color: #144852;
+            border-radius: 8px;
+            padding: 0.08rem 0.34rem;
+        }
+        .cross-workspace .stSubheader {
+            color: #1d4f5e;
         }
         div[data-testid="stMetric"] {
             background:
@@ -1307,6 +2529,65 @@ def main() -> None:
             border-radius: 20px;
             overflow: hidden;
         }
+        div[data-baseweb="tab-list"] {
+            gap: 0.5rem;
+            display: flex;
+            align-items: stretch;
+        }
+        div[data-baseweb="tab-list"] button {
+            flex: 1 1 0;
+            min-width: 17rem;
+            min-height: 4.1rem;
+            border-radius: 999px !important;
+            justify-content: center;
+            padding-left: 1rem !important;
+            padding-right: 1rem !important;
+            color: #4c566f !important;
+            font-weight: 700 !important;
+            font-size: 1.02rem !important;
+            letter-spacing: -0.015em;
+            background: rgba(255, 255, 255, 0.42) !important;
+            border: 1px solid rgba(116, 133, 160, 0.14) !important;
+            transition: transform 140ms ease, background 140ms ease, border-color 140ms ease, box-shadow 140ms ease, color 140ms ease;
+        }
+        div[data-baseweb="tab-list"] button:first-child {
+            background: linear-gradient(180deg, rgba(255, 232, 225, 0.96) 0%, rgba(255, 242, 238, 0.84) 100%) !important;
+            border-color: rgba(231, 137, 112, 0.28) !important;
+            color: #7a4c49 !important;
+        }
+        div[data-baseweb="tab-list"] button:nth-child(2) {
+            background: linear-gradient(180deg, rgba(226, 244, 243, 0.96) 0%, rgba(239, 249, 248, 0.84) 100%) !important;
+            border-color: rgba(88, 152, 145, 0.28) !important;
+            color: #2d5f66 !important;
+        }
+        div[data-baseweb="tab-list"] button[aria-selected="true"] {
+            box-shadow: 0 10px 20px rgba(93, 104, 134, 0.10);
+        }
+        div[data-baseweb="tab-list"] button:hover {
+            transform: translateY(-1px);
+        }
+        div[data-baseweb="tab-list"] button:first-child:hover {
+            background: linear-gradient(180deg, rgba(255, 224, 214, 0.98) 0%, rgba(255, 237, 231, 0.90) 100%) !important;
+            border-color: rgba(220, 123, 98, 0.34) !important;
+            box-shadow: 0 10px 22px rgba(221, 132, 108, 0.14) !important;
+        }
+        div[data-baseweb="tab-list"] button:nth-child(2):hover {
+            background: linear-gradient(180deg, rgba(216, 240, 237, 0.98) 0%, rgba(233, 247, 245, 0.90) 100%) !important;
+            border-color: rgba(69, 138, 131, 0.34) !important;
+            box-shadow: 0 10px 22px rgba(77, 144, 136, 0.14) !important;
+        }
+        div[data-baseweb="tab-list"] button:first-child[aria-selected="true"] {
+            background: linear-gradient(180deg, #ffd5c7 0%, #f8bfa9 100%) !important;
+            border-color: rgba(215, 114, 90, 0.44) !important;
+            color: #683f43 !important;
+            box-shadow: 0 12px 24px rgba(220, 126, 100, 0.18) !important;
+        }
+        div[data-baseweb="tab-list"] button:nth-child(2)[aria-selected="true"] {
+            background: linear-gradient(180deg, #ccece8 0%, #a7d9d1 100%) !important;
+            border-color: rgba(62, 131, 124, 0.40) !important;
+            color: #1f4e55 !important;
+            box-shadow: 0 12px 24px rgba(74, 137, 130, 0.16) !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -1317,194 +2598,52 @@ def main() -> None:
         <div class="hero-card">
             <div class="hero-title">Atlas Max KSF Converter</div>
             <div class="hero-subtitle">
-                Professional KSF conversion tool using the Atlas Max file as the structural mirror,
-                replacing only Vulcan-compatible values in matching Atlas template fields.
+                Professional KSF conversion tool with separate workflows for Vulcan to Atlas Max+
+                and Atlas Max+ to Poly / Poly to Atlas Max+.
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+    vulcan_tab, cross_tab = st.tabs(["Vulcan -> Atlas Max+", "Atlas Max+ <-> Poly"])
 
-    geometry_mode = "source"
-    copies_mode = "source"
-    set_name_mode = "template"
-    x_delta = 0.0
-    y_delta = 0.0
-
-    default_template_name, default_template_bytes = load_default_template_bytes()
-    uploader_nonce = st.session_state.setdefault("uploader_nonce", 0)
-
-    top_left, top_right = st.columns([1.5, 1])
-    with top_left:
-        st.markdown("<div class='section-card'>", unsafe_allow_html=True)
-        st.subheader("Source files")
-        input_mode = st.radio(
-            "Input mode",
-            options=["Single files", "ZIP", "Mixed"],
-            horizontal=True,
-        )
-        st.caption(
-            "Single files: upload one or more `.ksf` files directly. "
-            "ZIP: upload a `.zip` and scan all `.ksf` files inside it recursively. "
-            "Mixed: combine direct `.ksf` uploads with `.zip` packages in the same batch."
-        )
-        source_uploads = None
-        zip_uploads = None
-        if input_mode in {"Single files", "Mixed"}:
-            st.caption("Upload one or more Vulcan KSF files to convert.")
-            source_uploads = st.file_uploader(
-                "Vulcan source files",
-                type=["ksf"],
-                accept_multiple_files=True,
-                label_visibility="collapsed",
-                key=f"source-ksf-uploader-{uploader_nonce}",
-            )
-        if input_mode in {"ZIP", "Mixed"}:
-            st.caption("Upload one or more ZIP files. The app scans recursively for `.ksf` files.")
-            zip_uploads = st.file_uploader(
-                "ZIP source packages",
-                type=["zip"],
-                accept_multiple_files=True,
-                label_visibility="collapsed",
-                key=f"source-zip-uploader-{uploader_nonce}",
-            )
-        st.markdown("</div>", unsafe_allow_html=True)
-    with top_right:
-        st.markdown("<div class='section-card'>", unsafe_allow_html=True)
-        st.subheader("Atlas template")
-        use_default_template = st.toggle(
-            "Use built-in Atlas Max template",
-            value=default_template_bytes is not None,
-            help="If enabled, the app first looks for templates/approved_atlas_max_template.ksf, then templates/default_atlas_template.ksf, and finally falls back to the first .ksf file found inside templates/.",
+    with vulcan_tab:
+        render_conversion_workspace(
+            session_prefix="legacy",
+            template_heading="Atlas template",
+            template_toggle_label="Use built-in Atlas Max template",
+            template_upload_caption="Upload a custom Atlas Max KSF template.",
+            template_upload_label="Atlas Max template",
+            source_caption="Upload one or more Vulcan KSF files to convert.",
+            source_label="Vulcan source files",
+            workflow_info="The converted file uses the Atlas Max template only as the structural mirror. Mapping priority now follows this order: Vulcan output ICC first, setup second, Vulcan media as support, and input profile as a light support signal. The workbook is not treated as a strict horizontal row where every source field must match exactly. Atlas setup, Atlas media and Atlas output ICC come from the selected workbook row whenever a reliable match is found.",
+            analyze_error="Please provide at least one source file and a valid Atlas Max template.",
+            build_preview_fn=build_preview,
+            convert_sources_fn=convert_sources,
+            render_preview_fn=render_preview_legacy,
+            theme="legacy",
         )
 
-        template_upload = None
-        if use_default_template:
-            if default_template_bytes is not None:
-                st.success(f"Built-in template loaded: {default_template_name}")
-            else:
-                st.warning(
-                    "Built-in template not found. Add templates/approved_atlas_max_template.ksf, templates/default_atlas_template.ksf, place any .ksf file inside templates/, or upload a template manually."
-                )
-        else:
-            st.caption("Upload a custom Atlas Max KSF template.")
-            template_upload = st.file_uploader(
-                "Atlas Max template",
-                type=["ksf"],
-                accept_multiple_files=False,
-                label_visibility="collapsed",
-                key=f"template-uploader-{uploader_nonce}",
-            )
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    source_parts: list[SourceItem] = []
-    source_collection_issues: list[str] = []
-    source_error: str | None = None
-    try:
-        source_parts, source_collection_issues = collect_source_items(source_uploads, zip_uploads)
-    except zipfile.BadZipFile:
-        source_error = "One of the uploaded ZIP files is invalid or corrupted."
-    else:
-        source_error = detect_missing_source_error(source_uploads, zip_uploads, source_parts)
-
-    if use_default_template and default_template_bytes is not None:
-        template_name = default_template_name
-        template_bytes = default_template_bytes
-    else:
-        template_name = template_upload.name if template_upload else None
-        template_bytes = template_upload.getvalue() if template_upload else None
-
-    render_kpis(source_parts, template_name, st.session_state.get("preview"))
-
-    st.markdown("<div class='section-card'>", unsafe_allow_html=True)
-    st.subheader("Conversion workflow")
-    st.info(
-        "The converted file uses the Atlas Max template only as the structural mirror. Mapping priority now follows this order: Vulcan setup first, output profile second, Vulcan media as support, and input profile as a light support signal. The workbook is not treated as a strict horizontal row where every source field must match exactly. Atlas setup, Atlas media and Atlas output ICC come from the selected workbook row whenever a reliable match is found."
-    )
-    st.caption("Output is always generated as a single ZIP package with the converted KSF files and `conversion-report.json`.")
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    action_a, action_b, action_c = st.columns([1, 1.2, 0.8])
-    with action_a:
-        analyze_clicked = st.button("Analyze files", use_container_width=True)
-    with action_b:
-        convert_clicked = st.button("Convert and export ZIP", type="primary", use_container_width=True)
-    with action_c:
-        clear_clicked = st.button("Clear", use_container_width=True)
-
-    if clear_clicked:
-        for key in ["preview", "converted_items", "conversion_report", "zip_bytes"]:
-            st.session_state.pop(key, None)
-        st.session_state["uploader_nonce"] = uploader_nonce + 1
-        safe_rerun()
-
-    if source_error:
-        st.error(source_error)
-    for issue in source_collection_issues:
-        st.error(issue)
-
-    if analyze_clicked:
-        if not source_parts or not template_bytes:
-            if not source_parts and source_error:
-                st.error(source_error)
-            else:
-                st.error("Please provide at least one source file and a valid Atlas Max template.")
-        else:
-            resolved_template_name = template_name or "atlas-template.ksf"
-            st.session_state["preview"] = build_preview(
-                source_parts,
-                resolved_template_name,
-                template_bytes,
-            )
-
-    preview = st.session_state.get("preview")
-    if preview:
-        render_preview(preview)
-
-    if convert_clicked:
-        if not source_parts or not template_bytes:
-            if not source_parts and source_error:
-                st.error(source_error)
-            else:
-                st.error("Please provide at least one source file and a valid Atlas Max template.")
-        else:
-            resolved_template_name = template_name or "atlas-template.ksf"
-            preview = build_preview(source_parts, resolved_template_name, template_bytes)
-            st.session_state["preview"] = preview
-            converted_items = convert_sources(
-                source_parts=source_parts,
-                template_bytes=template_bytes,
-                geometry_mode=geometry_mode,
-                copies_mode=copies_mode,
-                set_name_mode=set_name_mode,
-                x_delta=float(x_delta),
-                y_delta=float(y_delta),
-            )
-            report = build_conversion_report(preview, converted_items)
-            st.session_state["converted_items"] = converted_items
-            st.session_state["conversion_report"] = report
-            st.session_state["zip_bytes"] = generate_zip_bundle(converted_items, report)
-            success_count = sum(1 for item in converted_items if item.status == "converted")
-            error_count = sum(1 for item in converted_items if item.status == "error")
-            if success_count:
-                st.success(f"Conversion completed. Success: {success_count} | Failed: {error_count}")
-            else:
-                st.error("No files were converted successfully.")
-
-    zip_bytes = st.session_state.get("zip_bytes")
-    if zip_bytes:
-        st.download_button(
-            "Download atlas-max-converted.zip",
-            data=zip_bytes,
-            file_name="atlas-max-converted.zip",
-            mime="application/zip",
-            use_container_width=True,
+    with cross_tab:
+        render_conversion_workspace(
+            session_prefix="cross",
+            template_heading="Output template",
+            template_toggle_label="Use built-in output template",
+            template_upload_caption="Upload a custom target KSF template.",
+            template_upload_label="Target KSF template",
+            source_caption="Upload one or more Atlas Max+ or Poly KSF files to convert.",
+            source_label="Atlas Max+ / Poly source files",
+            workflow_info="This workflow is dedicated to Atlas Max+ to Poly and Poly to Atlas Max+. It uses the dedicated workbook and searches the input KSF in this order: Base Setup first, Media second, Output ICC third, and Input RGB as a support signal. Once one reliable match identifies the row, the app applies the full mapped target values from that spreadsheet row without touching the approved Vulcan workflow.",
+            analyze_error="Please provide at least one source file and a valid target template.",
+            build_preview_fn=build_preview_cross,
+            convert_sources_fn=convert_sources_cross,
+            render_preview_fn=render_preview_cross,
+            theme="cross",
+            direction_options=[
+                ("Convert Plus -> Poly", "plus_to_poly"),
+                ("Convert Poly -> Plus", "poly_to_plus"),
+            ],
         )
-
-    converted_items = st.session_state.get("converted_items")
-    report = st.session_state.get("conversion_report")
-    if converted_items and report:
-        render_conversion_results(converted_items, report)
 
 
 if __name__ == "__main__":
