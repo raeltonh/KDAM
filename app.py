@@ -174,12 +174,25 @@ PREFERRED_CROSS_TEMPLATE_NAMES = {
         "approved_poly_output_template.ksf",
         "poly_output_template.ksf",
     ],
+    "max_to_poly": [
+        "approved_atlas_max_poly_template.ksf",
+        "atlas_max_poly_output_template.ksf",
+        "approved_poly_output_template.ksf",
+        "poly_output_template.ksf",
+    ],
     "poly_to_plus": [
         "approved_atlas_max_template.ksf",
         "atlas_max_plus_output_template.ksf",
         "approved_plus_output_template.ksf",
         "plus_output_template.ksf",
     ],
+    "avhd6_to_plus": [
+        "approved_atlas_max_template.ksf",
+        "atlas_max_plus_output_template.ksf",
+        "approved_plus_output_template.ksf",
+        "plus_output_template.ksf",
+    ],
+    "plus_to_avhd6": [],
 }
 
 
@@ -286,6 +299,66 @@ MAPPING_SHEET_DEFINITIONS = (
         target_input_rgb_headers=("PLUS_INPUT_RGB",),
         target_input_cmyk_headers=("PLUS_INPUT_CMYK",),
         target_pallet_headers=("PLUS_PALLET",),
+        status_headers=("STATUS",),
+        auto_map_key_headers=("AUTO_MAP_KEY",),
+        notes_headers=("NOTES",),
+    ),
+    MappingSheetDefinition(
+        sheet_name="MAX_TO_POLY",
+        source_family="atlas",
+        target_family="poly",
+        source_setup_headers=("MAX_SETUP", "MAX_BASE_SETUP"),
+        source_media_headers=("MAX_MEDIA",),
+        source_output_headers=("MAX_OUTPUT_ICC",),
+        source_input_rgb_headers=("MAX_INPUT_RGB",),
+        source_input_cmyk_headers=("MAX_INPUT_CMYK",),
+        target_setup_headers=("POLY_SETUP", "POLY_BASE_SETUP"),
+        target_base_setup_headers=("POLY_BASE_SETUP", "POLY_SETUP"),
+        target_media_headers=("POLY_MEDIA",),
+        target_output_headers=("POLY_OUTPUT_ICC",),
+        target_input_rgb_headers=("POLY_INPUT_RGB",),
+        target_input_cmyk_headers=("POLY_INPUT_CMYK",),
+        target_pallet_headers=("POLY_PALLET",),
+        status_headers=("STATUS",),
+        auto_map_key_headers=("AUTO_MAP_KEY",),
+        notes_headers=("NOTES",),
+    ),
+    MappingSheetDefinition(
+        sheet_name="AVHD6_TO_PLUS",
+        source_family="avhd6",
+        target_family="plus",
+        source_setup_headers=("AVHD6_SETUP", "AVHD6_BASE_SETUP"),
+        source_media_headers=("AVHD6_MEDIA",),
+        source_output_headers=("AVHD6_OUTPUT_ICC",),
+        source_input_rgb_headers=("AVHD6_INPUT_RGB",),
+        source_input_cmyk_headers=("AVHD6_INPUT_CMYK",),
+        target_setup_headers=("PLUS_SETUP", "PLUS_BASE_SETUP"),
+        target_base_setup_headers=("PLUS_BASE_SETUP", "PLUS_SETUP"),
+        target_media_headers=("PLUS_MEDIA",),
+        target_output_headers=("PLUS_OUTPUT_ICC",),
+        target_input_rgb_headers=("PLUS_INPUT_RGB",),
+        target_input_cmyk_headers=("PLUS_INPUT_CMYK",),
+        target_pallet_headers=("PLUS_PALLET",),
+        status_headers=("STATUS",),
+        auto_map_key_headers=("AUTO_MAP_KEY",),
+        notes_headers=("NOTES",),
+    ),
+    MappingSheetDefinition(
+        sheet_name="AVHD6_TO_PLUS",
+        source_family="plus",
+        target_family="avhd6",
+        source_setup_headers=("PLUS_SETUP", "PLUS_BASE_SETUP"),
+        source_media_headers=("PLUS_MEDIA",),
+        source_output_headers=("PLUS_OUTPUT_ICC",),
+        source_input_rgb_headers=("PLUS_INPUT_RGB",),
+        source_input_cmyk_headers=("PLUS_INPUT_CMYK",),
+        target_setup_headers=("AVHD6_SETUP", "AVHD6_BASE_SETUP"),
+        target_base_setup_headers=("AVHD6_BASE_SETUP", "AVHD6_SETUP"),
+        target_media_headers=("AVHD6_MEDIA",),
+        target_output_headers=("AVHD6_OUTPUT_ICC",),
+        target_input_rgb_headers=("AVHD6_INPUT_RGB",),
+        target_input_cmyk_headers=("AVHD6_INPUT_CMYK",),
+        target_pallet_headers=("AVHD6_PALLET",),
         status_headers=("STATUS",),
         auto_map_key_headers=("AUTO_MAP_KEY",),
         notes_headers=("NOTES",),
@@ -1034,6 +1107,8 @@ def detect_mapping_family(root: ET.Element | None) -> str | None:
 
     if "atlas max poly" in haystack or "maxpoly" in haystack or "atl poly" in haystack:
         return "poly"
+    if "av hd6" in haystack or "avhd6" in haystack:
+        return "avhd6"
     if "atlas max+" in haystack or "atlas max plus" in haystack:
         return "plus"
     if "vulcan" in haystack:
@@ -1052,8 +1127,22 @@ def families_are_compatible(detected_family: str | None, row_family: str) -> boo
     compatible_families = {
         "atlas": {"atlas", "plus"},
         "plus": {"plus", "atlas"},
+        "max": {"max", "atlas", "plus"},
+        "avhd6": {"avhd6"},
     }
     return row_family in compatible_families.get(detected_family, {detected_family})
+
+
+def get_cross_direction_families(direction: str) -> tuple[str, str]:
+    if direction == "plus_to_poly":
+        return "plus", "poly"
+    if direction == "max_to_poly":
+        return "atlas", "poly"
+    if direction == "avhd6_to_plus":
+        return "avhd6", "plus"
+    if direction == "plus_to_avhd6":
+        return "plus", "avhd6"
+    return "poly", "plus"
 
 
 def infer_atlas_setup_key(root: ET.Element) -> str | None:
@@ -1590,8 +1679,7 @@ def build_converted_root_cross(
     if copies_mode == "source":
         preserve_copies(source_root, target_root)
 
-    expected_source_family = "plus" if direction == "plus_to_poly" else "poly"
-    expected_target_family = "poly" if direction == "plus_to_poly" else "plus"
+    expected_source_family, expected_target_family = get_cross_direction_families(direction)
     mapping_row = find_mapping_row(
         source_root,
         target_root,
@@ -1620,8 +1708,7 @@ def build_preview_cross(
     template_root = parse_ksf_bytes(template_bytes)
     template_info = detect_profile(template_root)
     mapping_workbook_name, _ = load_mapping_rows()
-    expected_source_family = "plus" if direction == "plus_to_poly" else "poly"
-    expected_target_family = "poly" if direction == "plus_to_poly" else "plus"
+    expected_source_family, expected_target_family = get_cross_direction_families(direction)
 
     items = []
     for item in files:
@@ -1991,7 +2078,12 @@ def render_conversion_workspace(
     convert_sources_fn: Any,
     render_preview_fn: Any,
     theme: str = "legacy",
+    theme_variant: str | None = None,
     direction_options: list[tuple[str, str]] | None = None,
+    hero_kicker: str | None = None,
+    hero_title: str | None = None,
+    hero_copy: str | None = None,
+    hero_chips: list[str] | None = None,
 ) -> None:
     geometry_mode = "source"
     copies_mode = "source"
@@ -2003,23 +2095,38 @@ def render_conversion_workspace(
     uploader_nonce_key = f"{session_prefix}_uploader_nonce"
     uploader_nonce = st.session_state.setdefault(uploader_nonce_key, 0)
 
+    resolved_theme_variant = theme_variant or theme
     section_card_class = "section-card cross-section-card" if theme == "cross" else "section-card"
-    workspace_class = "cross-workspace" if theme == "cross" else "legacy-workspace"
     if theme == "cross":
+        section_card_class = f"{section_card_class} theme-{resolved_theme_variant}-card"
+        workspace_class = f"cross-workspace theme-{resolved_theme_variant}-workspace"
+        hero_class = f"cross-hero theme-{resolved_theme_variant}-hero"
+    else:
+        section_card_class = f"{section_card_class} theme-{resolved_theme_variant}-card"
+        workspace_class = f"legacy-workspace theme-{resolved_theme_variant}-workspace"
+        hero_class = ""
+    if theme == "cross":
+        resolved_hero_kicker = hero_kicker or "Dedicated Cross-Mapping Workspace"
+        resolved_hero_title = hero_title or "Atlas Max+ <-> Poly Mapping Station"
+        resolved_hero_copy = hero_copy or (
+            "Spreadsheet-driven conversion for stable setup/media/ICC mappings. This workspace is isolated "
+            "from the approved Vulcan flow and is meant for directional mapping validation and controlled rollout."
+        )
+        resolved_hero_chips = hero_chips or [
+            "Base Setup Priority",
+            "Media Fallback",
+            "ICC-Led Recovery",
+            "Template-Safe Output",
+        ]
+        chips_html = "".join(f"<span class='cross-chip'>{chip}</span>" for chip in resolved_hero_chips)
         st.markdown(
-            """
-            <div class="cross-hero">
-                <div class="cross-hero-kicker">Dedicated Cross-Mapping Workspace</div>
-                <div class="cross-hero-title">Atlas Max+ <-> Poly Mapping Station</div>
-                <div class="cross-hero-copy">
-                    Spreadsheet-driven conversion for stable setup/media/ICC mappings. This workspace is isolated
-                    from the approved Vulcan flow and is meant for directional mapping validation and controlled rollout.
-                </div>
+            f"""
+            <div class="{hero_class}">
+                <div class="cross-hero-kicker">{resolved_hero_kicker}</div>
+                <div class="cross-hero-title">{resolved_hero_title}</div>
+                <div class="cross-hero-copy">{resolved_hero_copy}</div>
                 <div class="cross-chip-row">
-                    <span class="cross-chip">Base Setup Priority</span>
-                    <span class="cross-chip">Media Fallback</span>
-                    <span class="cross-chip">ICC-Led Recovery</span>
-                    <span class="cross-chip">Template-Safe Output</span>
+                    {chips_html}
                 </div>
             </div>
             """,
@@ -2072,6 +2179,21 @@ def render_conversion_workspace(
         active_default_template_name, active_default_template_bytes = load_preferred_template_bytes(
             PREFERRED_CROSS_TEMPLATE_NAMES["plus_to_poly"]
         )
+    elif theme == "cross" and direction_value == "max_to_poly":
+        active_template_heading = "Poly output template"
+        active_template_toggle_label = "Use built-in Poly output template"
+        active_template_upload_caption = "Upload a Poly KSF output template."
+        active_template_upload_label = "Poly output template"
+        active_source_caption = "Upload one or more Atlas Max KSF files to convert into Poly."
+        active_source_label = "Atlas Max source files"
+        active_workflow_info = (
+            "Direction selected: Max -> Poly. The app reads Atlas Max source fields and searches the "
+            "MAX_TO_POLY sheet by Base Setup first, Media second, Output ICC third, and Input RGB as "
+            "a support signal. Once a reliable match is found, the full Poly target package from that row is applied."
+        )
+        active_default_template_name, active_default_template_bytes = load_preferred_template_bytes(
+            PREFERRED_CROSS_TEMPLATE_NAMES["max_to_poly"]
+        )
     elif theme == "cross" and direction_value == "poly_to_plus":
         active_template_heading = "Atlas Max+ output template"
         active_template_toggle_label = "Use built-in Atlas Max+ output template"
@@ -2086,6 +2208,36 @@ def render_conversion_workspace(
         )
         active_default_template_name, active_default_template_bytes = load_preferred_template_bytes(
             PREFERRED_CROSS_TEMPLATE_NAMES["poly_to_plus"]
+        )
+    elif theme == "cross" and direction_value == "avhd6_to_plus":
+        active_template_heading = "Atlas Max+ output template"
+        active_template_toggle_label = "Use built-in Atlas Max+ output template"
+        active_template_upload_caption = "Upload an Atlas Max+ KSF output template."
+        active_template_upload_label = "Atlas Max+ output template"
+        active_source_caption = "Upload one or more AVHD6 KSF files to convert into Atlas Max+."
+        active_source_label = "AVHD6 source files"
+        active_workflow_info = (
+            "Direction selected: AVHD6 -> Plus. The app reads AVHD6 source fields and searches the "
+            "AVHD6_TO_PLUS sheet by Base Setup first, Media second, Output ICC third, and Input RGB as "
+            "a support signal. Once a reliable match is found, the full Atlas Max+ target package from that row is applied."
+        )
+        active_default_template_name, active_default_template_bytes = load_preferred_template_bytes(
+            PREFERRED_CROSS_TEMPLATE_NAMES["avhd6_to_plus"]
+        )
+    elif theme == "cross" and direction_value == "plus_to_avhd6":
+        active_template_heading = "AVHD6 output template"
+        active_template_toggle_label = "Use built-in AVHD6 output template"
+        active_template_upload_caption = "Upload an AVHD6 KSF output template."
+        active_template_upload_label = "AVHD6 output template"
+        active_source_caption = "Upload one or more Atlas Max+ KSF files to convert into AVHD6."
+        active_source_label = "Atlas Max+ source files"
+        active_workflow_info = (
+            "Direction selected: Plus -> AVHD6. The app uses the AVHD6_TO_PLUS sheet in reverse, matching Atlas Max+ "
+            "source fields by Base Setup first, Media second, Output ICC third, and Input RGB as a support signal. "
+            "Once a reliable match is found, the full AVHD6 target package from that row is applied."
+        )
+        active_default_template_name, active_default_template_bytes = load_preferred_template_bytes(
+            PREFERRED_CROSS_TEMPLATE_NAMES["plus_to_avhd6"]
         )
 
     top_left, top_right = st.columns([1.5, 1])
@@ -2452,6 +2604,138 @@ def main() -> None:
         .cross-workspace .stSubheader {
             color: #1d4f5e;
         }
+        .theme-cross-card {
+            background:
+                linear-gradient(180deg, rgba(238, 250, 252, 0.96) 0%, rgba(226, 243, 247, 0.84) 100%);
+            border: 1px solid rgba(66, 131, 151, 0.22);
+            box-shadow: 0 18px 34px rgba(44, 92, 111, 0.10);
+        }
+        .theme-cross-hero {
+            background:
+                radial-gradient(circle at 12% 18%, rgba(123, 216, 224, 0.18), transparent 24%),
+                radial-gradient(circle at 84% 30%, rgba(255, 205, 126, 0.18), transparent 26%),
+                linear-gradient(135deg, rgba(11, 67, 86, 0.98) 0%, rgba(16, 104, 115, 0.95) 54%, rgba(55, 148, 150, 0.92) 100%);
+            border-color: rgba(87, 184, 196, 0.24);
+            box-shadow: 0 24px 42px rgba(20, 76, 92, 0.22);
+        }
+        .theme-cross-workspace div[data-testid="stMetric"] {
+            background:
+                linear-gradient(160deg, rgba(219, 244, 247, 0.98) 0%, rgba(193, 232, 238, 0.94) 100%);
+            border: 1px solid rgba(69, 139, 156, 0.20);
+            box-shadow: 0 14px 28px rgba(37, 91, 107, 0.12);
+        }
+        .theme-cross-workspace div[data-testid="stAlert"] {
+            border-color: rgba(68, 140, 154, 0.24);
+            box-shadow: 0 14px 26px rgba(46, 92, 104, 0.10);
+        }
+        .theme-cross-workspace div[data-testid="stButton"] > button {
+            background: linear-gradient(180deg, #1a7f8c 0%, #145e6a 100%);
+            color: #eefbfd;
+            border-color: rgba(23, 100, 112, 0.34);
+            box-shadow: 0 14px 26px rgba(18, 88, 99, 0.20);
+        }
+        .theme-cross-workspace div[data-testid="stButton"] > button[kind="primary"] {
+            background: linear-gradient(180deg, #ffd07b 0%, #e5a94d 100%);
+            color: #5a3f10;
+            border-color: rgba(153, 109, 42, 0.28);
+        }
+        .theme-cross-workspace div[data-testid="stDownloadButton"] > button {
+            background: linear-gradient(180deg, #bdece1 0%, #94d4c8 100%);
+            color: #174c49;
+            border-color: rgba(54, 131, 121, 0.24);
+            box-shadow: 0 14px 26px rgba(45, 111, 104, 0.16);
+        }
+        .theme-cross-workspace div[data-testid="stFileUploader"] {
+            background:
+                linear-gradient(180deg, rgba(239, 251, 252, 0.94) 0%, rgba(224, 244, 247, 0.84) 100%);
+            border-color: rgba(74, 136, 151, 0.30);
+        }
+        .theme-cross-workspace div[data-testid="stExpander"] {
+            border: 1px solid rgba(79, 143, 159, 0.20);
+            box-shadow: 0 14px 28px rgba(44, 92, 109, 0.08);
+            background: linear-gradient(180deg, rgba(245, 252, 253, 0.92) 0%, rgba(233, 246, 249, 0.90) 100%);
+        }
+        .theme-cross-workspace div[data-testid="stMarkdownContainer"] code {
+            background: rgba(24, 98, 110, 0.10);
+            color: #135360;
+        }
+        .theme-cross-workspace .stSubheader {
+            color: #145564;
+        }
+        .theme-avhd6-card {
+            background:
+                linear-gradient(180deg, rgba(255, 248, 228, 0.96) 0%, rgba(255, 241, 208, 0.86) 100%);
+            border: 1px solid rgba(187, 145, 47, 0.24);
+            box-shadow: 0 18px 34px rgba(145, 113, 37, 0.10);
+        }
+        .theme-avhd6-hero {
+            background:
+                radial-gradient(circle at 10% 16%, rgba(255, 221, 128, 0.18), transparent 24%),
+                radial-gradient(circle at 86% 24%, rgba(255, 246, 206, 0.12), transparent 28%),
+                linear-gradient(135deg, rgba(122, 75, 14, 0.98) 0%, rgba(174, 118, 23, 0.95) 48%, rgba(224, 170, 52, 0.92) 100%);
+            border-color: rgba(214, 167, 62, 0.28);
+            box-shadow: 0 24px 42px rgba(123, 83, 18, 0.24);
+        }
+        .theme-avhd6-hero .cross-hero-kicker {
+            background: rgba(255, 247, 222, 0.14);
+            border-color: rgba(255, 244, 208, 0.20);
+            color: #fff5dc;
+        }
+        .theme-avhd6-hero .cross-hero-title {
+            color: #fffaf0;
+        }
+        .theme-avhd6-hero .cross-hero-copy {
+            color: rgba(255, 247, 226, 0.88);
+        }
+        .theme-avhd6-hero .cross-chip {
+            background: rgba(255, 249, 233, 0.14);
+            border-color: rgba(255, 245, 217, 0.18);
+            color: #fff8e8;
+        }
+        .theme-avhd6-workspace div[data-testid="stMetric"] {
+            background:
+                linear-gradient(160deg, rgba(255, 243, 204, 0.98) 0%, rgba(255, 232, 173, 0.94) 100%);
+            border: 1px solid rgba(188, 145, 39, 0.22);
+            box-shadow: 0 14px 28px rgba(155, 117, 28, 0.12);
+        }
+        .theme-avhd6-workspace div[data-testid="stAlert"] {
+            border-color: rgba(191, 147, 42, 0.24);
+            box-shadow: 0 14px 26px rgba(150, 114, 31, 0.10);
+        }
+        .theme-avhd6-workspace div[data-testid="stButton"] > button {
+            background: linear-gradient(180deg, #c88c20 0%, #8f6112 100%);
+            color: #fff8eb;
+            border-color: rgba(144, 100, 18, 0.34);
+            box-shadow: 0 14px 26px rgba(144, 99, 17, 0.20);
+        }
+        .theme-avhd6-workspace div[data-testid="stButton"] > button[kind="primary"] {
+            background: linear-gradient(180deg, #fff2b9 0%, #f2cf67 100%);
+            color: #654708;
+            border-color: rgba(173, 132, 32, 0.28);
+        }
+        .theme-avhd6-workspace div[data-testid="stDownloadButton"] > button {
+            background: linear-gradient(180deg, #ffe1a6 0%, #f0ba56 100%);
+            color: #6d4b09;
+            border-color: rgba(184, 135, 29, 0.24);
+            box-shadow: 0 14px 26px rgba(175, 128, 28, 0.16);
+        }
+        .theme-avhd6-workspace div[data-testid="stFileUploader"] {
+            background:
+                linear-gradient(180deg, rgba(255, 250, 236, 0.94) 0%, rgba(255, 241, 209, 0.86) 100%);
+            border-color: rgba(197, 154, 53, 0.30);
+        }
+        .theme-avhd6-workspace div[data-testid="stExpander"] {
+            border: 1px solid rgba(188, 145, 48, 0.20);
+            box-shadow: 0 14px 28px rgba(153, 116, 35, 0.08);
+            background: linear-gradient(180deg, rgba(255, 252, 241, 0.92) 0%, rgba(255, 245, 220, 0.90) 100%);
+        }
+        .theme-avhd6-workspace div[data-testid="stMarkdownContainer"] code {
+            background: rgba(150, 104, 15, 0.10);
+            color: #7a5308;
+        }
+        .theme-avhd6-workspace .stSubheader {
+            color: #7b5207;
+        }
         div[data-testid="stMetric"] {
             background:
                 linear-gradient(160deg, rgba(255, 241, 234, 0.92) 0%, rgba(239, 248, 245, 0.92) 100%);
@@ -2551,14 +2835,19 @@ def main() -> None:
             transition: transform 140ms ease, background 140ms ease, border-color 140ms ease, box-shadow 140ms ease, color 140ms ease;
         }
         div[data-baseweb="tab-list"] button:first-child {
-            background: linear-gradient(180deg, rgba(255, 232, 225, 0.96) 0%, rgba(255, 242, 238, 0.84) 100%) !important;
-            border-color: rgba(231, 137, 112, 0.28) !important;
-            color: #7a4c49 !important;
+            background: linear-gradient(180deg, rgba(255, 222, 210, 0.98) 0%, rgba(255, 238, 229, 0.86) 100%) !important;
+            border-color: rgba(220, 116, 88, 0.34) !important;
+            color: #764038 !important;
         }
         div[data-baseweb="tab-list"] button:nth-child(2) {
-            background: linear-gradient(180deg, rgba(226, 244, 243, 0.96) 0%, rgba(239, 249, 248, 0.84) 100%) !important;
-            border-color: rgba(88, 152, 145, 0.28) !important;
-            color: #2d5f66 !important;
+            background: linear-gradient(180deg, rgba(208, 240, 234, 0.98) 0%, rgba(231, 248, 244, 0.86) 100%) !important;
+            border-color: rgba(54, 145, 132, 0.34) !important;
+            color: #1f5d59 !important;
+        }
+        div[data-baseweb="tab-list"] button:nth-child(3) {
+            background: linear-gradient(180deg, rgba(255, 235, 184, 0.98) 0%, rgba(255, 246, 214, 0.88) 100%) !important;
+            border-color: rgba(196, 145, 41, 0.34) !important;
+            color: #6e5312 !important;
         }
         div[data-baseweb="tab-list"] button[aria-selected="true"] {
             box-shadow: 0 10px 20px rgba(93, 104, 134, 0.10);
@@ -2567,26 +2856,37 @@ def main() -> None:
             transform: translateY(-1px);
         }
         div[data-baseweb="tab-list"] button:first-child:hover {
-            background: linear-gradient(180deg, rgba(255, 224, 214, 0.98) 0%, rgba(255, 237, 231, 0.90) 100%) !important;
-            border-color: rgba(220, 123, 98, 0.34) !important;
-            box-shadow: 0 10px 22px rgba(221, 132, 108, 0.14) !important;
+            background: linear-gradient(180deg, rgba(255, 210, 196, 1) 0%, rgba(255, 231, 220, 0.92) 100%) !important;
+            border-color: rgba(212, 104, 75, 0.40) !important;
+            box-shadow: 0 10px 22px rgba(214, 112, 86, 0.16) !important;
         }
         div[data-baseweb="tab-list"] button:nth-child(2):hover {
-            background: linear-gradient(180deg, rgba(216, 240, 237, 0.98) 0%, rgba(233, 247, 245, 0.90) 100%) !important;
-            border-color: rgba(69, 138, 131, 0.34) !important;
-            box-shadow: 0 10px 22px rgba(77, 144, 136, 0.14) !important;
+            background: linear-gradient(180deg, rgba(194, 234, 225, 1) 0%, rgba(223, 245, 238, 0.92) 100%) !important;
+            border-color: rgba(41, 132, 119, 0.40) !important;
+            box-shadow: 0 10px 22px rgba(55, 136, 124, 0.16) !important;
+        }
+        div[data-baseweb="tab-list"] button:nth-child(3):hover {
+            background: linear-gradient(180deg, rgba(255, 226, 156, 1) 0%, rgba(255, 241, 196, 0.92) 100%) !important;
+            border-color: rgba(184, 132, 24, 0.40) !important;
+            box-shadow: 0 10px 22px rgba(191, 145, 43, 0.16) !important;
         }
         div[data-baseweb="tab-list"] button:first-child[aria-selected="true"] {
-            background: linear-gradient(180deg, #ffd5c7 0%, #f8bfa9 100%) !important;
-            border-color: rgba(215, 114, 90, 0.44) !important;
-            color: #683f43 !important;
-            box-shadow: 0 12px 24px rgba(220, 126, 100, 0.18) !important;
+            background: linear-gradient(180deg, #ffbea8 0%, #f29d80 100%) !important;
+            border-color: rgba(200, 93, 63, 0.48) !important;
+            color: #5f2f28 !important;
+            box-shadow: 0 12px 24px rgba(212, 108, 78, 0.22) !important;
         }
         div[data-baseweb="tab-list"] button:nth-child(2)[aria-selected="true"] {
-            background: linear-gradient(180deg, #ccece8 0%, #a7d9d1 100%) !important;
-            border-color: rgba(62, 131, 124, 0.40) !important;
-            color: #1f4e55 !important;
-            box-shadow: 0 12px 24px rgba(74, 137, 130, 0.16) !important;
+            background: linear-gradient(180deg, #9fded2 0%, #69bfaf 100%) !important;
+            border-color: rgba(31, 120, 107, 0.46) !important;
+            color: #124843 !important;
+            box-shadow: 0 12px 24px rgba(47, 129, 117, 0.20) !important;
+        }
+        div[data-baseweb="tab-list"] button:nth-child(3)[aria-selected="true"] {
+            background: linear-gradient(180deg, #ffd36f 0%, #e7ab2f 100%) !important;
+            border-color: rgba(169, 117, 10, 0.46) !important;
+            color: #5a4008 !important;
+            box-shadow: 0 12px 24px rgba(187, 132, 24, 0.20) !important;
         }
         </style>
         """,
@@ -2598,14 +2898,16 @@ def main() -> None:
         <div class="hero-card">
             <div class="hero-title">Atlas Max KSF Converter</div>
             <div class="hero-subtitle">
-                Professional KSF conversion tool with separate workflows for Vulcan to Atlas Max+
-                and Atlas Max+ to Poly / Poly to Atlas Max+.
+                Professional KSF conversion tool with separate workflows for Vulcan to Atlas Max+,
+                Atlas Max family to Poly, and AVHD6 to Atlas Max+.
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    vulcan_tab, cross_tab = st.tabs(["Vulcan -> Atlas Max+", "Atlas Max+ <-> Poly"])
+    vulcan_tab, cross_tab, avhd6_tab = st.tabs(
+        ["Vulcan -> Atlas Max+", "Atlas Max+ <-> Poly", "AVHD6 <-> Atlas Max+"]
+    )
 
     with vulcan_tab:
         render_conversion_workspace(
@@ -2622,6 +2924,7 @@ def main() -> None:
             convert_sources_fn=convert_sources,
             render_preview_fn=render_preview_legacy,
             theme="legacy",
+            theme_variant="legacy",
         )
 
     with cross_tab:
@@ -2631,18 +2934,49 @@ def main() -> None:
             template_toggle_label="Use built-in output template",
             template_upload_caption="Upload a custom target KSF template.",
             template_upload_label="Target KSF template",
-            source_caption="Upload one or more Atlas Max+ or Poly KSF files to convert.",
-            source_label="Atlas Max+ / Poly source files",
-            workflow_info="This workflow is dedicated to Atlas Max+ to Poly and Poly to Atlas Max+. It uses the dedicated workbook and searches the input KSF in this order: Base Setup first, Media second, Output ICC third, and Input RGB as a support signal. Once one reliable match identifies the row, the app applies the full mapped target values from that spreadsheet row without touching the approved Vulcan workflow.",
+            source_caption="Upload one or more Atlas Max+, Atlas Max, or Poly KSF files to convert.",
+            source_label="Atlas Max+ / Atlas Max / Poly source files",
+            workflow_info="This workflow is dedicated to Atlas Max+ to Poly, Atlas Max to Poly, and Poly to Atlas Max+. It uses the dedicated workbook and searches the input KSF in this order: Base Setup first, Media second, Output ICC third, and Input RGB as a support signal. Once one reliable match identifies the row, the app applies the full mapped target values from that spreadsheet row without touching the approved Vulcan workflow.",
             analyze_error="Please provide at least one source file and a valid target template.",
             build_preview_fn=build_preview_cross,
             convert_sources_fn=convert_sources_cross,
             render_preview_fn=render_preview_cross,
             theme="cross",
+            theme_variant="cross",
             direction_options=[
                 ("Convert Plus -> Poly", "plus_to_poly"),
+                ("Convert Max -> Poly", "max_to_poly"),
                 ("Convert Poly -> Plus", "poly_to_plus"),
             ],
+            hero_title="Atlas Max+ <-> Poly Mapping Station",
+            hero_copy="Spreadsheet-driven conversion for Atlas Max+, Atlas Max, and Poly mappings. This workspace is isolated from the approved Vulcan flow and is meant for directional mapping validation and controlled rollout.",
+            hero_chips=["Plus to Poly", "Max to Poly", "Poly to Plus", "Template-Safe Output"],
+        )
+
+    with avhd6_tab:
+        render_conversion_workspace(
+            session_prefix="avhd6",
+            template_heading="Output template",
+            template_toggle_label="Use built-in output template",
+            template_upload_caption="Upload a custom target KSF template.",
+            template_upload_label="Target KSF template",
+            source_caption="Upload one or more AVHD6 or Atlas Max+ KSF files to convert.",
+            source_label="AVHD6 / Atlas Max+ source files",
+            workflow_info="This workflow is dedicated to AVHD6 to Atlas Max+ and Atlas Max+ to AVHD6. It uses the dedicated workbook and searches the input KSF in this order: Base Setup first, Media second, Output ICC third, and Input RGB as a support signal. Once one reliable match identifies the row, the app applies the full mapped target values from that spreadsheet row.",
+            analyze_error="Please provide at least one source file and a valid target template.",
+            build_preview_fn=build_preview_cross,
+            convert_sources_fn=convert_sources_cross,
+            render_preview_fn=render_preview_cross,
+            theme="cross",
+            theme_variant="avhd6",
+            direction_options=[
+                ("Convert AVHD6 -> Plus", "avhd6_to_plus"),
+                ("Convert Plus -> AVHD6", "plus_to_avhd6"),
+            ],
+            hero_kicker="Dedicated AVHD6 Workspace",
+            hero_title="AVHD6 <-> Atlas Max+ Mapping Station",
+            hero_copy="Spreadsheet-driven conversion for AVHD6 and Atlas Max+ mappings. This workspace mirrors the cross-conversion flow and keeps directional mapping isolated for validation and controlled rollout.",
+            hero_chips=["AVHD6 to Plus", "Plus to AVHD6", "Setup-First Match", "Template-Safe Output"],
         )
 
 
