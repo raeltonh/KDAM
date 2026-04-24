@@ -192,7 +192,10 @@ PREFERRED_CROSS_TEMPLATE_NAMES = {
         "approved_plus_output_template.ksf",
         "plus_output_template.ksf",
     ],
-    "plus_to_avhd6": [],
+    "plus_to_avhd6": [
+        "approved_avhd6_output_template.ksf",
+        "avhd6_output_template.ksf",
+    ],
 }
 
 
@@ -789,7 +792,9 @@ def find_legacy_mapping_row(source_root: ET.Element) -> MappingRow | None:
         return bonus
 
     best_row: MappingRow | None = None
-    best_score = -1
+    best_source_score = -1
+    best_template_score = -1
+    best_bonus_score = -1
 
     for row in rows:
         row_setup_norm = normalize_lookup(row.source_setup)
@@ -972,7 +977,9 @@ def find_mapping_row(
         return bonus
 
     best_row: MappingRow | None = None
-    best_score = -1
+    best_source_score = -1
+    best_template_score = -1
+    best_bonus_score = -1
 
     for row in rows:
         if not families_are_compatible(source_family, row.source_family):
@@ -989,52 +996,64 @@ def find_mapping_row(
         row_target_media_norm = normalize_lookup(row.target_media)
         row_target_output_norm = normalize_lookup(row.target_output_icc)
 
-        score = 0
+        source_score = 0
+        template_score = 0
+        bonus_score = row_status_priority(row) + field_presence_bonus(row)
 
         if row_setup_norm:
             if source_base_setup_norm and row_setup_norm == source_base_setup_norm:
-                score += 1200
+                source_score += 1200
             elif source_base_setup_norm:
-                score += similarity_score(row.source_setup, source_base_setup) * 10
+                source_score += similarity_score(row.source_setup, source_base_setup) * 10
 
             if source_setup_norm and row_setup_norm == source_setup_norm:
-                score += 700
+                source_score += 700
             elif source_setup_norm:
-                score += similarity_score(row.source_setup, source_setup) * 5
+                source_score += similarity_score(row.source_setup, source_setup) * 5
 
         if row_output_norm and source_output_norm:
             if row_output_norm == source_output_norm:
-                score += 700
+                source_score += 700
             else:
-                score += similarity_score(row.source_output_icc, source_output_icc) * 6
+                source_score += similarity_score(row.source_output_icc, source_output_icc) * 6
 
         if row_media_norm and source_media_norm:
-            score += similarity_score(row.source_media, source_media) * 4
+            source_score += similarity_score(row.source_media, source_media) * 4
 
         if row_input_rgb_norm and source_input_rgb_norm:
-            score += similarity_score(row.source_input_rgb, source_input_rgb) * 2
+            source_score += similarity_score(row.source_input_rgb, source_input_rgb) * 2
         if row_input_cmyk_norm and source_input_cmyk_norm:
-            score += similarity_score(row.source_input_cmyk, source_input_cmyk)
+            source_score += similarity_score(row.source_input_cmyk, source_input_cmyk)
 
         if template_root is not None:
             if row_target_base_norm and template_base_setup_norm:
                 if row_target_base_norm == template_base_setup_norm:
-                    score += 180
+                    template_score += 180
                 else:
-                    score += similarity_score(row.target_base_setup or row.target_setup, template_base_setup) * 2
+                    template_score += similarity_score(row.target_base_setup or row.target_setup, template_base_setup) * 2
             if row_target_media_norm and template_media_norm:
-                score += similarity_score(row.target_media, template_media) * 2
+                template_score += similarity_score(row.target_media, template_media) * 2
             if row_target_output_norm and template_output_norm:
-                score += similarity_score(row.target_output_icc, template_output_icc) * 2
+                template_score += similarity_score(row.target_output_icc, template_output_icc) * 2
 
-        score += row_status_priority(row)
-        score += field_presence_bonus(row)
-
-        if score > best_score:
-            best_score = score
+        if (
+            source_score > best_source_score
+            or (
+                source_score == best_source_score
+                and template_score > best_template_score
+            )
+            or (
+                source_score == best_source_score
+                and template_score == best_template_score
+                and bonus_score > best_bonus_score
+            )
+        ):
             best_row = row
+            best_source_score = source_score
+            best_template_score = template_score
+            best_bonus_score = bonus_score
 
-    if best_score < 120:
+    if best_source_score < 120:
         return None
 
     return best_row
@@ -1143,6 +1162,34 @@ def get_cross_direction_families(direction: str) -> tuple[str, str]:
     if direction == "plus_to_avhd6":
         return "plus", "avhd6"
     return "poly", "plus"
+
+
+def validate_cross_direction(
+    source_root: ET.Element,
+    template_root: ET.Element | None,
+    direction: str,
+) -> str | None:
+    expected_source_family, expected_target_family = get_cross_direction_families(direction)
+    detected_source_family = detect_mapping_family(source_root)
+    detected_target_family = detect_mapping_family(template_root)
+
+    if detected_source_family and not families_are_compatible(detected_source_family, expected_source_family):
+        return (
+            f"Source file family mismatch for direction `{direction}`. "
+            f"Expected `{expected_source_family}`, detected `{detected_source_family}`."
+        )
+
+    if (
+        template_root is not None
+        and detected_target_family
+        and not families_are_compatible(detected_target_family, expected_target_family)
+    ):
+        return (
+            f"Output template family mismatch for direction `{direction}`. "
+            f"Expected `{expected_target_family}`, detected `{detected_target_family}`."
+        )
+
+    return None
 
 
 def infer_atlas_setup_key(root: ET.Element) -> str | None:
@@ -1679,6 +1726,10 @@ def build_converted_root_cross(
     if copies_mode == "source":
         preserve_copies(source_root, target_root)
 
+    direction_error = validate_cross_direction(source_root, target_root, direction)
+    if direction_error:
+        raise ValueError(direction_error)
+
     expected_source_family, expected_target_family = get_cross_direction_families(direction)
     mapping_row = find_mapping_row(
         source_root,
@@ -1716,6 +1767,20 @@ def build_preview_cross(
         try:
             root = parse_ksf_bytes(item.data)
             source_info = detect_profile(root)
+            direction_error = validate_cross_direction(root, template_root, direction)
+            if direction_error:
+                items.append(
+                    {
+                        "filename": filename,
+                        "origin": item.origin,
+                        "status": "error",
+                        "source": source_info,
+                        "template": template_info,
+                        "warnings": [],
+                        "error": direction_error,
+                    }
+                )
+                continue
             mapping_row = find_mapping_row(
                 root,
                 template_root,
@@ -2209,7 +2274,7 @@ def render_conversion_workspace(
         active_default_template_name, active_default_template_bytes = load_preferred_template_bytes(
             PREFERRED_CROSS_TEMPLATE_NAMES["poly_to_plus"]
         )
-    elif theme == "cross" and direction_value == "avhd6_to_plus":
+    elif direction_value == "avhd6_to_plus":
         active_template_heading = "Atlas Max+ output template"
         active_template_toggle_label = "Use built-in Atlas Max+ output template"
         active_template_upload_caption = "Upload an Atlas Max+ KSF output template."
@@ -2224,7 +2289,7 @@ def render_conversion_workspace(
         active_default_template_name, active_default_template_bytes = load_preferred_template_bytes(
             PREFERRED_CROSS_TEMPLATE_NAMES["avhd6_to_plus"]
         )
-    elif theme == "cross" and direction_value == "plus_to_avhd6":
+    elif direction_value == "plus_to_avhd6":
         active_template_heading = "AVHD6 output template"
         active_template_toggle_label = "Use built-in AVHD6 output template"
         active_template_upload_caption = "Upload an AVHD6 KSF output template."
