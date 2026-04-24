@@ -16,6 +16,9 @@ import streamlit as st
 from collections import OrderedDict
 # openpyxl is imported lazily inside load_mapping_rows() so the app can run without it
 
+ET.register_namespace("xsi", "http://www.w3.org/2001/XMLSchema-instance")
+ET.register_namespace("xsd", "http://www.w3.org/2001/XMLSchema")
+
 COPY_TAGS = {"TotalCopies"}
 
 SOURCE_PASSTHROUGH_TAGS = {
@@ -148,7 +151,6 @@ CANONICAL_ATLAS_TARGETS = {
 
 ROOT_ATTRS = OrderedDict([
     ("xmlns:xsd", "http://www.w3.org/2001/XMLSchema"),
-    ("xmlns:xsi", "http://www.w3.org/2001/XMLSchema-instance"),
 ])
 
 # Special separation rules block
@@ -170,12 +172,24 @@ DEFAULT_TEMPLATE_PATH = DEFAULT_TEMPLATE_DIR / PREFERRED_TEMPLATE_NAMES[0]
 PREFERRED_CROSS_TEMPLATE_NAMES = {
     "plus_to_poly": [
         "approved_atlas_max_poly_template.ksf",
+        "approved_poly_kxlgm_dark_tee_template.kst",
+        "approved_poly_kxlgm_dark_hoodie_template.kst",
+        "approved_poly_kxlgm_light_tee_template.kst",
+        "approved_poly_kxlgm_light_hoodie_template.kst",
+        "approved_poly_kxlgm_white_tee_template.kst",
+        "approved_poly_kxlgm_white_hoodie_template.kst",
         "atlas_max_poly_output_template.ksf",
         "approved_poly_output_template.ksf",
         "poly_output_template.ksf",
     ],
     "max_to_poly": [
         "approved_atlas_max_poly_template.ksf",
+        "approved_poly_kxlgm_dark_tee_template.kst",
+        "approved_poly_kxlgm_dark_hoodie_template.kst",
+        "approved_poly_kxlgm_light_tee_template.kst",
+        "approved_poly_kxlgm_light_hoodie_template.kst",
+        "approved_poly_kxlgm_white_tee_template.kst",
+        "approved_poly_kxlgm_white_hoodie_template.kst",
         "atlas_max_poly_output_template.ksf",
         "approved_poly_output_template.ksf",
         "poly_output_template.ksf",
@@ -218,6 +232,36 @@ LEGACY_MAPPING_WORKBOOK_NAMES = (
 CROSS_MAPPING_WORKBOOK_NAMES = (
     "atlas_max_plus_to_poly_mapping_template.xlsx",
 )
+
+PALLET_OVERRIDE_DEFAULT = "Use mapping value"
+POLY_PALLET_OPTIONS = [
+    PALLET_OVERRIDE_DEFAULT,
+    "Standard pallet",
+    "Standard pallet poly",
+    "Atlas - Baby",
+    "Atlas - Children (L)",
+    "Atlas - Children (S)",
+    "Atlas - Grand",
+    "Atlas - Neck Tag",
+    "Atlas - Standard",
+    "Atlas - Standard poly",
+    "Atlas - Super Grand",
+    "Atlas - Tote bag",
+    "Atlas - Youth And Ladies Neck Tag",
+    "Atlas - Youth and Ladies",
+    "Atlas - Zipper hoodie",
+    "AutoFIT - Large",
+    "AutoFIT - Large Neck Tag",
+    "AutoFIT - Medium",
+    "AutoFIT - Medium Neck Tag",
+    "AutoFIT - Small",
+    "AutoFIT - Small Neck Tag",
+    "AutoFIT ExtraLarge",
+    "AutoFIT Hoodies Medium",
+    "AutoFIT Hoodies Small",
+    "AutoFIT MenYouth",
+    "Undefined",
+]
 
 
 @dataclass(frozen=True)
@@ -530,6 +574,18 @@ def load_preferred_template_bytes(preferred_names: list[str]) -> tuple[str | Non
             return candidate.name, candidate.read_bytes()
 
     return None, None
+
+
+def load_available_template_options(preferred_names: list[str]) -> dict[str, bytes]:
+    if not DEFAULT_TEMPLATE_DIR.is_dir():
+        return {}
+
+    options: dict[str, bytes] = {}
+    for filename in preferred_names:
+        candidate = DEFAULT_TEMPLATE_DIR / filename
+        if candidate.is_file():
+            options[candidate.name] = candidate.read_bytes()
+    return options
 
 
 def normalize_lookup(text: str) -> str:
@@ -1076,7 +1132,9 @@ def apply_mapping_row(target_root: ET.Element, mapping_row: MappingRow | None) -
 
     if target_setup:
         replace_simple_text(target_root, "SetApplied", target_setup)
-    if target_base_setup:
+    if mapping_row.target_family == "poly":
+        replace_simple_text(target_root, "LastBaseSetupName", "")
+    elif target_base_setup:
         replace_simple_text(target_root, "LastBaseSetupName", target_base_setup)
     if target_media:
         replace_simple_text(target_root, "MediaName", target_media)
@@ -1706,6 +1764,7 @@ def build_converted_root_cross(
     output_stem: str,
     x_delta: float,
     y_delta: float,
+    pallet_override: str | None = None,
 ) -> ET.Element:
     target_root = cast(ET.Element, copy.deepcopy(template_tree.getroot()))
     white_support_type = target_root.attrib.get("WhiteSupportType", "WBCICC")
@@ -1744,6 +1803,9 @@ def build_converted_root_cross(
 
     if set_name_mode == "source-file":
         replace_simple_text(target_root, "SetApplied", output_stem)
+
+    if pallet_override:
+        replace_simple_text(target_root, "TableName", pallet_override)
 
     apply_offset_delta(target_root, x_delta, y_delta)
     sync_strip_geometry_from_root(target_root)
@@ -1843,6 +1905,7 @@ def convert_sources_cross(
     set_name_mode: str,
     x_delta: float,
     y_delta: float,
+    pallet_override: str | None = None,
 ) -> list[ConvertedItem]:
     template_root = parse_ksf_bytes(template_bytes)
     template_tree = ET.ElementTree(template_root)
@@ -1862,6 +1925,7 @@ def convert_sources_cross(
                 output_stem=output_path.stem,
                 x_delta=x_delta,
                 y_delta=y_delta,
+                pallet_override=pallet_override,
             )
             results.append(
                 ConvertedItem(
@@ -2228,8 +2292,10 @@ def render_conversion_workspace(
     active_workflow_info = workflow_info
     active_default_template_name = default_template_name
     active_default_template_bytes = default_template_bytes
+    active_preferred_template_names: list[str] = []
 
     if theme == "cross" and direction_value == "plus_to_poly":
+        active_preferred_template_names = PREFERRED_CROSS_TEMPLATE_NAMES["plus_to_poly"]
         active_template_heading = "Poly output template"
         active_template_toggle_label = "Use built-in Poly output template"
         active_template_upload_caption = "Upload a Poly KSF output template."
@@ -2245,6 +2311,7 @@ def render_conversion_workspace(
             PREFERRED_CROSS_TEMPLATE_NAMES["plus_to_poly"]
         )
     elif theme == "cross" and direction_value == "max_to_poly":
+        active_preferred_template_names = PREFERRED_CROSS_TEMPLATE_NAMES["max_to_poly"]
         active_template_heading = "Poly output template"
         active_template_toggle_label = "Use built-in Poly output template"
         active_template_upload_caption = "Upload a Poly KSF output template."
@@ -2260,6 +2327,7 @@ def render_conversion_workspace(
             PREFERRED_CROSS_TEMPLATE_NAMES["max_to_poly"]
         )
     elif theme == "cross" and direction_value == "poly_to_plus":
+        active_preferred_template_names = PREFERRED_CROSS_TEMPLATE_NAMES["poly_to_plus"]
         active_template_heading = "Atlas Max+ output template"
         active_template_toggle_label = "Use built-in Atlas Max+ output template"
         active_template_upload_caption = "Upload an Atlas Max+ KSF output template."
@@ -2275,6 +2343,7 @@ def render_conversion_workspace(
             PREFERRED_CROSS_TEMPLATE_NAMES["poly_to_plus"]
         )
     elif direction_value == "avhd6_to_plus":
+        active_preferred_template_names = PREFERRED_CROSS_TEMPLATE_NAMES["avhd6_to_plus"]
         active_template_heading = "Atlas Max+ output template"
         active_template_toggle_label = "Use built-in Atlas Max+ output template"
         active_template_upload_caption = "Upload an Atlas Max+ KSF output template."
@@ -2290,6 +2359,7 @@ def render_conversion_workspace(
             PREFERRED_CROSS_TEMPLATE_NAMES["avhd6_to_plus"]
         )
     elif direction_value == "plus_to_avhd6":
+        active_preferred_template_names = PREFERRED_CROSS_TEMPLATE_NAMES["plus_to_avhd6"]
         active_template_heading = "AVHD6 output template"
         active_template_toggle_label = "Use built-in AVHD6 output template"
         active_template_upload_caption = "Upload an AVHD6 KSF output template."
@@ -2352,8 +2422,24 @@ def render_conversion_workspace(
         )
 
         template_upload = None
+        selected_builtin_template_name = active_default_template_name
+        selected_builtin_template_bytes = active_default_template_bytes
         if use_default_template:
-            if active_default_template_bytes is not None:
+            builtin_template_options = (
+                load_available_template_options(active_preferred_template_names)
+                if active_preferred_template_names
+                else {}
+            )
+            if builtin_template_options:
+                selected_builtin_template_name = st.selectbox(
+                    "Built-in template",
+                    options=list(builtin_template_options.keys()),
+                    index=0,
+                    key=f"{session_prefix}_builtin_template",
+                )
+                selected_builtin_template_bytes = builtin_template_options[selected_builtin_template_name]
+                st.success(f"Built-in template loaded: {selected_builtin_template_name}")
+            elif active_default_template_bytes is not None:
                 st.success(f"Built-in template loaded: {active_default_template_name}")
             else:
                 st.warning(
@@ -2363,7 +2449,7 @@ def render_conversion_workspace(
             st.caption(active_template_upload_caption)
             template_upload = st.file_uploader(
                 active_template_upload_label,
-                type=["ksf"],
+                type=["ksf", "kst"],
                 accept_multiple_files=False,
                 label_visibility="collapsed",
                 key=f"{session_prefix}_template_{uploader_nonce}",
@@ -2380,9 +2466,9 @@ def render_conversion_workspace(
     else:
         source_error = detect_missing_source_error(source_uploads, zip_uploads, source_parts)
 
-    if use_default_template and active_default_template_bytes is not None:
-        template_name = active_default_template_name
-        template_bytes = active_default_template_bytes
+    if use_default_template and selected_builtin_template_bytes is not None:
+        template_name = selected_builtin_template_name
+        template_bytes = selected_builtin_template_bytes
     else:
         template_name = template_upload.name if template_upload else None
         template_bytes = template_upload.getvalue() if template_upload else None
@@ -2393,6 +2479,29 @@ def render_conversion_workspace(
     zip_bytes_key = f"{session_prefix}_zip_bytes"
 
     render_kpis(source_parts, template_name, st.session_state.get(preview_key))
+
+    selected_pallet_override: str | None = None
+    show_pallet_override = False
+    if direction_value is not None:
+        _, expected_target_family = get_cross_direction_families(direction_value)
+        show_pallet_override = expected_target_family == "poly"
+
+    if show_pallet_override:
+        st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
+        st.subheader("Pallet override")
+        selected_pallet = st.selectbox(
+            "Pallet name",
+            options=POLY_PALLET_OPTIONS,
+            index=0,
+            help="If selected, this value is written to <TableName> in every converted KSF. Leave as mapping value to use the spreadsheet.",
+            key=f"{session_prefix}_pallet_override",
+        )
+        if selected_pallet != PALLET_OVERRIDE_DEFAULT:
+            selected_pallet_override = selected_pallet
+            st.caption(f"Output KSF files will use TableName: `{selected_pallet_override}`")
+        else:
+            st.caption("Output KSF files will use the pallet from the mapping spreadsheet.")
+        st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
     st.subheader("Conversion workflow")
@@ -2470,6 +2579,7 @@ def render_conversion_workspace(
             )
             if direction_value is not None:
                 convert_kwargs["direction"] = direction_value
+                convert_kwargs["pallet_override"] = selected_pallet_override
             converted_items = convert_sources_fn(**convert_kwargs)
             report = build_conversion_report(preview, converted_items)
             st.session_state[converted_items_key] = converted_items
