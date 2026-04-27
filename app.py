@@ -50,6 +50,25 @@ SOURCE_PASSTHROUGH_TAGS = {
     "WhiteKnockout",
 }
 
+CROSS_SOURCE_PASSTHROUGH_TAGS = SOURCE_PASSTHROUGH_TAGS | {
+    "MediaPrintHeight",
+    "MediaThickness",
+    "WhitePass",
+    "WithWhiteInterlace",
+    "White4DInterlace",
+    "UseImageWhiteLayer",
+    "WBCMaxOpacity",
+    "WBCLUTMaxWhite",
+    "WBCMinOpacity",
+    "WBCPivot",
+    "WBCWhiteness",
+    "GradedEdgesWhitePixels",
+    "WhiteChokeOnlyUnderColor",
+    "TagSprayAddition",
+    "UseMediaThicknessSmartDryer",
+    "PrintWhiteAreas",
+}
+
 
 GEOMETRY_TAGS = {
     "XOffsetMM",
@@ -450,7 +469,7 @@ class ConvertedItem:
 
 
 def load_xml(path: Path) -> ET.ElementTree:
-    return cast(ET.ElementTree, ET.parse(path))
+    return ET.ElementTree(parse_ksf_bytes(path.read_bytes()))
 
 
 def safe_rerun() -> None:
@@ -848,9 +867,7 @@ def find_legacy_mapping_row(source_root: ET.Element) -> MappingRow | None:
         return bonus
 
     best_row: MappingRow | None = None
-    best_source_score = -1
-    best_template_score = -1
-    best_bonus_score = -1
+    best_score = -1
 
     for row in rows:
         row_setup_norm = normalize_lookup(row.source_setup)
@@ -914,6 +931,7 @@ def apply_legacy_mapping_row(target_root: ET.Element, mapping_row: MappingRow | 
         replace_simple_text(target_root, "IccOutFileName", atlas_output_icc)
     if mapping_row.target_pallet:
         replace_simple_text(target_root, "TableName", mapping_row.target_pallet)
+    apply_atlas_plus_setup_defaults(target_root, atlas_setup)
 
 @lru_cache(maxsize=1)
 def load_mapping_rows() -> tuple[str | None, list[MappingRow]]:
@@ -1149,7 +1167,13 @@ def apply_mapping_row(target_root: ET.Element, mapping_row: MappingRow | None) -
 
 
 def parse_ksf_bytes(data: bytes) -> ET.Element:
-    return cast(ET.Element, ET.fromstring(data))
+    try:
+        return cast(ET.Element, ET.fromstring(data))
+    except ET.ParseError:
+        xml_start = data.find(b"<?xml")
+        if 0 < xml_start <= 32:
+            return cast(ET.Element, ET.fromstring(data[xml_start:]))
+        raise
 
 
 def get_text(root: ET.Element, tag: str) -> str:
@@ -1295,6 +1319,7 @@ def apply_atlas_setup_mapping(target_root: ET.Element, atlas_setup_key: str | No
     replace_simple_text(target_root, "LastBaseSetupName", mapping["last_base_setup_name"])
     replace_simple_text(target_root, "MediaName", media_name)
     replace_simple_text(target_root, "IccOutFileName", icc_out)
+    apply_atlas_plus_setup_defaults(target_root, mapping["set_applied"])
 
 
 def detect_profile(root: ET.Element) -> dict:
@@ -1444,6 +1469,12 @@ def get_canonical_atlas_targets(
     if canonical is None:
         return fallback_media, fallback_icc_out
     return canonical["media_name"], canonical["icc_out"]
+
+
+def apply_atlas_plus_setup_defaults(target_root: ET.Element, atlas_setup: str) -> None:
+    if normalize_lookup(atlas_setup).startswith("atlas max+ light"):
+        replace_simple_text(target_root, "WhitePass", "None")
+        replace_simple_text(target_root, "RenderingIntent", "Perceptual")
 
 
 def sync_strip_geometry_from_root(target_root: ET.Element) -> None:
@@ -1773,7 +1804,7 @@ def build_converted_root_cross(
         target_root.set(key, value)
     target_root.set("WhiteSupportType", white_support_type)
 
-    for tag in SOURCE_PASSTHROUGH_TAGS:
+    for tag in CROSS_SOURCE_PASSTHROUGH_TAGS:
         source_node = source_root.find(tag)
         if source_node is not None:
             replace_existing_only(target_root, source_node)
