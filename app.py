@@ -50,23 +50,19 @@ SOURCE_PASSTHROUGH_TAGS = {
     "WhiteKnockout",
 }
 
-CROSS_SOURCE_PASSTHROUGH_TAGS = SOURCE_PASSTHROUGH_TAGS | {
+CROSS_SOURCE_PASSTHROUGH_TAGS = {
+    "Tags",
     "MediaPrintHeight",
-    "MediaThickness",
-    "WhitePass",
-    "WithWhiteInterlace",
-    "White4DInterlace",
-    "UseImageWhiteLayer",
+    "SprayAmount",
+    "LinearSprayAmount",
+    "TagSprayAddition",
+    "MaxOpacity",
+    "MinOpacity",
     "WBCMaxOpacity",
     "WBCLUTMaxWhite",
     "WBCMinOpacity",
     "WBCPivot",
     "WBCWhiteness",
-    "GradedEdgesWhitePixels",
-    "WhiteChokeOnlyUnderColor",
-    "TagSprayAddition",
-    "UseMediaThicknessSmartDryer",
-    "PrintWhiteAreas",
 }
 
 
