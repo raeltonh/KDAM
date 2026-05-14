@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.streamlit/secrets.toml
+
+# Generated conversion outputs and client transfer bundles
+out/
+final_output/
+out_suffix_test/
+*.zip

@@ -27,6 +27,19 @@ O app permite:
 - baixar os `.ksf` convertidos individualmente,
 - exibir recomendacoes operacionais com base no conteudo do `.ksf`,
 - avisar quando a origem indicar `Black T'shirt` e recomendar `Black setup` na Atlas Max.
+- publicar alteracoes locais no GitHub pelo painel `GitHub sync`, desde que a autenticacao git local ja esteja configurada.
+
+## Atualizar GitHub pelo app
+
+O painel `GitHub sync` fica no sidebar do Streamlit. Ele mostra a branch atual, o remoto `origin`, quantos commits locais ainda nao foram enviados e se existem arquivos modificados.
+
+Para publicar:
+
+1. confirme a mensagem de commit,
+2. marque `Include new untracked files` somente se quiser incluir arquivos novos,
+3. clique em `Commit and push to GitHub`.
+
+Se o app mostrar erro de autenticacao, configure o acesso ao GitHub no computador primeiro. O app usa o proprio `git push` local e nao salva token ou senha.
 
 ## Modos de entrada e entrega
 

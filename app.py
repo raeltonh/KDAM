@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import copy
+import os
 import io
 import json
+import subprocess
 import xml.etree.ElementTree as ET
 from typing import Any, cast
 from pathlib import Path
 import zipfile
 from dataclasses import dataclass
+from datetime import datetime
 from functools import lru_cache
 
 import streamlit as st
@@ -20,13 +23,21 @@ ET.register_namespace("xsi", "http://www.w3.org/2001/XMLSchema-instance")
 ET.register_namespace("xsd", "http://www.w3.org/2001/XMLSchema")
 
 COPY_TAGS = {"TotalCopies"}
+APP_ROOT = Path(__file__).resolve().parent
 
 SOURCE_PASSTHROUGH_TAGS = {
     "Tags",
+    "MediaPrintHeight",
     "SprayAmount",
     "LinearSprayAmount",
+    "TagSprayAddition",
     "MaxOpacity",
     "MinOpacity",
+    "WBCMaxOpacity",
+    "WBCLUTMaxWhite",
+    "WBCMinOpacity",
+    "WBCPivot",
+    "WBCWhiteness",
     "ChokeWhitePixels",
     "HighlightOpacity",
     "ColorSaturation",
@@ -92,7 +103,7 @@ ATLAS_SETUP_MAP = {
         "media_name": "Atlas MAX+ Black STD",
         "icc_in_rgb": "RGB Color Space Profile",
         "icc_out": "Atlas MAX+ Black STD SatRGK.icm",
-        "rendering_intent": "Perceptual",
+        "rendering_intent": "RelativeColorimetric",
     },
     "black_high_production": {
         "set_applied": "Atlas MAX+ Black High Production",
@@ -100,7 +111,7 @@ ATLAS_SETUP_MAP = {
         "media_name": "Atlas MAX+ Black HP",
         "icc_in_rgb": "RGB Color Space Profile",
         "icc_out": "Atlas MAX+ Black High Production.icm",
-        "rendering_intent": "Perceptual",
+        "rendering_intent": "RelativeColorimetric",
     },
     "black_hq": {
         "set_applied": "Atlas MAX+ Black HQ",
@@ -108,7 +119,7 @@ ATLAS_SETUP_MAP = {
         "media_name": "Atlas MAX+ Black HQ",
         "icc_in_rgb": "RGB Color Space Profile",
         "icc_out": "Atlas MAX+ Black HQ.icm",
-        "rendering_intent": "Perceptual",
+        "rendering_intent": "RelativeColorimetric",
     },
     "light_high_production": {
         "set_applied": "Atlas MAX+ Light High Production",
@@ -116,7 +127,7 @@ ATLAS_SETUP_MAP = {
         "media_name": "Atlas MAX+ Light High Production",
         "icc_in_rgb": "RGB Color Space Profile",
         "icc_out": "Atlas MAX+ Light High Production.icm",
-        "rendering_intent": "Perceptual",
+        "rendering_intent": "RelativeColorimetric",
     },
     "light_hq": {
         "set_applied": "Atlas MAX+ Light HQ",
@@ -124,7 +135,7 @@ ATLAS_SETUP_MAP = {
         "media_name": "Atlas MAX+ Light HQ",
         "icc_in_rgb": "RGB Color Space Profile",
         "icc_out": "Atlas MAX+ Light HQ.icm",
-        "rendering_intent": "Perceptual",
+        "rendering_intent": "RelativeColorimetric",
     },
     "light_std": {
         "set_applied": "Atlas MAX+ Light STD",
@@ -132,7 +143,7 @@ ATLAS_SETUP_MAP = {
         "media_name": "Atlas MAX+ Light STD",
         "icc_in_rgb": "RGB Color Space Profile",
         "icc_out": "Atlas MAX+ Light STD.icm",
-        "rendering_intent": "Perceptual",
+        "rendering_intent": "RelativeColorimetric",
     },
 }
 
@@ -170,10 +181,19 @@ ROOT_ATTRS = OrderedDict([
 
 # Special separation rules block
 SPECIAL_SEPARATION_RULES = {
-    "Qc": {"solid": "25", "max_coverage": "0", "is_max_coverage": "false"},
-    "Qw": {"solid": "0", "max_coverage": "55", "is_max_coverage": "true"},
-    "Iw": {"solid": "40", "max_coverage": "0", "is_max_coverage": "false"},
-    "Ic": {"solid": "25", "max_coverage": "0", "is_max_coverage": "false"},
+    "Qc": {"solid": "0", "max_coverage": "25", "is_max_coverage": "true", "channel_index": "0"},
+    "Qw": {"solid": "0", "max_coverage": "45", "is_max_coverage": "true", "channel_index": "0"},
+    "Iw": {"solid": "25", "max_coverage": "0", "is_max_coverage": "false", "channel_index": "0"},
+    "Ic": {"solid": "0", "max_coverage": "0", "is_max_coverage": "false", "channel_index": "0"},
+}
+
+ATLAS_PLUS_WHITE_DEFAULTS = {
+    "WhiteTransparency": "25",
+    "WBCMaxOpacity": "95",
+    "WBCLUTMaxWhite": "80",
+    "WBCWhiteness": "85",
+    "ChokeWhitePixels": "2",
+    "GradedEdgesWhitePixels": "2",
 }
 
 # Built-in default template path
@@ -216,6 +236,12 @@ PREFERRED_CROSS_TEMPLATE_NAMES = {
         "plus_output_template.ksf",
     ],
     "avhd6_to_plus": [
+        "approved_atlas_max_template.ksf",
+        "atlas_max_plus_output_template.ksf",
+        "approved_plus_output_template.ksf",
+        "plus_output_template.ksf",
+    ],
+    "avalanche1000_to_plus": [
         "approved_atlas_max_template.ksf",
         "atlas_max_plus_output_template.ksf",
         "approved_plus_output_template.ksf",
@@ -277,6 +303,16 @@ POLY_PALLET_OPTIONS = [
     "AutoFIT MenYouth",
     "Undefined",
 ]
+
+AVALANCHE1000_PALLET_MAP = {
+    "Children pallet V3 (spring) Large": "RSS - 11x15",
+    "Children pallet V3 (spring) Small": "RSS - 10.6x13.2",
+    "Standard pallet": "RSS - 15.9x19.9",
+    "Standard pallet poly": "RSS - 15.9x19.9",
+}
+
+VULCAN_OUTPUT_PALLET = "RSS - 15.9x19.9"
+PREVIEW_RENDER_LIMIT = 100
 
 
 @dataclass(frozen=True)
@@ -386,14 +422,34 @@ MAPPING_SHEET_DEFINITIONS = (
         notes_headers=("NOTES",),
     ),
     MappingSheetDefinition(
+        sheet_name="AV1000 TO PLUS",
+        source_family="avalanche1000",
+        target_family="plus",
+        source_setup_headers=("AV1000_SETUP", "AV1000_BASE_SETUP", "AVHD6_SETUP", "AVHD6_BASE_SETUP"),
+        source_media_headers=("AV1000_MEDIA", "AVHD6_MEDIA"),
+        source_output_headers=("AV1000_OUTPUT_ICC", "AVHD6_OUTPUT_ICC"),
+        source_input_rgb_headers=("AV1000_INPUT_RGB", "AVHD6_INPUT_RGB"),
+        source_input_cmyk_headers=("AV1000_INPUT_CMYK", "AVHD6_INPUT_CMYK"),
+        target_setup_headers=("PLUS_SETUP", "PLUS_BASE_SETUP"),
+        target_base_setup_headers=("PLUS_BASE_SETUP", "PLUS_SETUP"),
+        target_media_headers=("PLUS_MEDIA",),
+        target_output_headers=("PLUS_OUTPUT_ICC",),
+        target_input_rgb_headers=("PLUS_INPUT_RGB",),
+        target_input_cmyk_headers=("PLUS_INPUT_CMYK",),
+        target_pallet_headers=("PLUS_PALLET",),
+        status_headers=("STATUS",),
+        auto_map_key_headers=("AUTO_MAP_KEY",),
+        notes_headers=("NOTES",),
+    ),
+    MappingSheetDefinition(
         sheet_name="AVHD6_TO_PLUS",
         source_family="avhd6",
         target_family="plus",
-        source_setup_headers=("AVHD6_SETUP", "AVHD6_BASE_SETUP"),
-        source_media_headers=("AVHD6_MEDIA",),
-        source_output_headers=("AVHD6_OUTPUT_ICC",),
-        source_input_rgb_headers=("AVHD6_INPUT_RGB",),
-        source_input_cmyk_headers=("AVHD6_INPUT_CMYK",),
+        source_setup_headers=("AVHD6_SETUP", "AVHD6_BASE_SETUP", "AVALANCHE_SETUP", "AVALANCHE_BASE_SETUP"),
+        source_media_headers=("AVHD6_MEDIA", "AVALANCHE_MEDIA"),
+        source_output_headers=("AVHD6_OUTPUT_ICC", "AVALANCHE_OUTPUT_ICC"),
+        source_input_rgb_headers=("AVHD6_INPUT_RGB", "AVALANCHE_INPUT_RGB"),
+        source_input_cmyk_headers=("AVHD6_INPUT_CMYK", "AVALANCHE_INPUT_CMYK"),
         target_setup_headers=("PLUS_SETUP", "PLUS_BASE_SETUP"),
         target_base_setup_headers=("PLUS_BASE_SETUP", "PLUS_SETUP"),
         target_media_headers=("PLUS_MEDIA",),
@@ -414,13 +470,13 @@ MAPPING_SHEET_DEFINITIONS = (
         source_output_headers=("PLUS_OUTPUT_ICC",),
         source_input_rgb_headers=("PLUS_INPUT_RGB",),
         source_input_cmyk_headers=("PLUS_INPUT_CMYK",),
-        target_setup_headers=("AVHD6_SETUP", "AVHD6_BASE_SETUP"),
-        target_base_setup_headers=("AVHD6_BASE_SETUP", "AVHD6_SETUP"),
-        target_media_headers=("AVHD6_MEDIA",),
-        target_output_headers=("AVHD6_OUTPUT_ICC",),
-        target_input_rgb_headers=("AVHD6_INPUT_RGB",),
-        target_input_cmyk_headers=("AVHD6_INPUT_CMYK",),
-        target_pallet_headers=("AVHD6_PALLET",),
+        target_setup_headers=("AVHD6_SETUP", "AVHD6_BASE_SETUP", "AVALANCHE_SETUP", "AVALANCHE_BASE_SETUP"),
+        target_base_setup_headers=("AVHD6_BASE_SETUP", "AVHD6_SETUP", "AVALANCHE_BASE_SETUP", "AVALANCHE_SETUP"),
+        target_media_headers=("AVHD6_MEDIA", "AVALANCHE_MEDIA"),
+        target_output_headers=("AVHD6_OUTPUT_ICC", "AVALANCHE_OUTPUT_ICC"),
+        target_input_rgb_headers=("AVHD6_INPUT_RGB", "AVALANCHE_INPUT_RGB"),
+        target_input_cmyk_headers=("AVHD6_INPUT_CMYK", "AVALANCHE_INPUT_CMYK"),
+        target_pallet_headers=("AVHD6_PALLET", "AVALANCHE_PALLET"),
         status_headers=("STATUS",),
         auto_map_key_headers=("AUTO_MAP_KEY",),
         notes_headers=("NOTES",),
@@ -833,11 +889,13 @@ def find_legacy_mapping_row(source_root: ET.Element) -> MappingRow | None:
         return None
 
     source_setup = get_text(source_root, "SetApplied")
+    source_base_setup = get_text(source_root, "LastBaseSetupName")
     source_media = get_text(source_root, "MediaName")
     source_input = get_text(source_root, "IccInRGBFileName")
     source_output = get_text(source_root, "IccOutFileName")
 
     source_setup_norm = normalize_lookup(source_setup)
+    source_base_setup_norm = normalize_lookup(source_base_setup)
     source_media_norm = normalize_lookup(source_media)
     source_input_norm = normalize_lookup(source_input)
     source_output_norm = normalize_lookup(source_output)
@@ -866,6 +924,9 @@ def find_legacy_mapping_row(source_root: ET.Element) -> MappingRow | None:
     best_score = -1
 
     for row in rows:
+        if not (row.target_setup or row.target_media or row.target_output_icc):
+            continue
+
         row_setup_norm = normalize_lookup(row.source_setup)
         row_media_norm = normalize_lookup(row.source_media)
         row_input_norm = normalize_lookup(row.source_input_rgb)
@@ -873,20 +934,39 @@ def find_legacy_mapping_row(source_root: ET.Element) -> MappingRow | None:
 
         score = 0
 
-        if row_output_norm and source_output_norm:
-            if row_output_norm == source_output_norm:
-                score += 1200
-            else:
-                score += similarity_score(row.source_output_icc, source_output) * 10
-
         if row_setup_norm and source_setup_norm:
             if row_setup_norm == source_setup_norm:
-                score += 700
+                score += 5000
             else:
-                score += similarity_score(row.source_setup, source_setup) * 6
+                score += similarity_score(row.source_setup, source_setup) * 2
+
+        if row_setup_norm and source_base_setup_norm:
+            if row_setup_norm == source_base_setup_norm:
+                score += 5000
+            else:
+                score += similarity_score(row.source_setup, source_base_setup) * 2
+
+        if (
+            row_media_norm
+            and row_output_norm
+            and source_media_norm
+            and source_output_norm
+            and row_media_norm == source_media_norm
+            and row_output_norm == source_output_norm
+        ):
+            score += 4500
+
+        if row_output_norm and source_output_norm:
+            if row_output_norm == source_output_norm:
+                score += 2000
+            else:
+                score += similarity_score(row.source_output_icc, source_output) * 8
 
         if row_media_norm and source_media_norm:
-            score += similarity_score(row.source_media, source_media) * 3
+            if row_media_norm == source_media_norm:
+                score += 1200
+            else:
+                score += similarity_score(row.source_media, source_media) * 5
 
         if row_input_norm and source_input_norm:
             score += similarity_score(row.source_input_rgb, source_input)
@@ -1129,6 +1209,163 @@ def find_mapping_row(
     return best_row
 
 
+def infer_avalanche1000_plus_setup(source_root: ET.Element) -> str:
+    media = normalize_lookup(get_text(source_root, "MediaName"))
+    setup = normalize_lookup(get_text(source_root, "SetApplied"))
+    base_setup = normalize_lookup(get_text(source_root, "LastBaseSetupName"))
+    output_icc = normalize_lookup(get_text(source_root, "IccOutFileName"))
+    white_pass = normalize_lookup(get_text(source_root, "WhitePass"))
+    haystack = " ".join([media, setup, base_setup, output_icc, white_pass])
+
+    if "atlas max poly whitet" in media:
+        return "Atlas MAX+ Light STD"
+    if "atlas max poly neon hq" in media:
+        return "Atlas MAX+ Color STD"
+
+    if "color" in media:
+        if "highprod" in media or "high production" in media:
+            return "Atlas MAX+ Color High Production"
+        if "hq" in media:
+            return "Atlas MAX+ Color HQ"
+        if "std" in media or "standard" in media:
+            return "Atlas MAX+ Color STD"
+
+    if "black" in media:
+        if "highprod" in media or "high production" in media:
+            return "Atlas MAX+ Color High Production"
+        if "hq" in media:
+            return "Atlas MAX+ Color HQ"
+        return "Atlas MAX+ Color STD Pro"
+
+    if "light" in media:
+        if "highprod" in media or "high production" in media:
+            return "Atlas MAX+ Light High Production"
+        if "hq" in media:
+            return "Atlas MAX+ Light HQ"
+        return "Atlas MAX+ Light STD"
+
+    if media in {"darks", "black standard"} or "dark" in setup or "black" in setup:
+        return "Atlas MAX+ Color STD Pro"
+    if media in {"lights", "light no white", "white standard"} or "light" in setup or "no white" in setup:
+        return "Atlas MAX+ Light STD"
+    if media in {"sweats", "sweats no white"}:
+        if "black" in output_icc:
+            return "Atlas MAX+ Color STD Pro"
+        return "Atlas MAX+ Light STD"
+    if "white ink" in haystack or "heather" in haystack or "smoke" in haystack or "color" in haystack:
+        if "std" in haystack or white_pass == "single":
+            return "Atlas MAX+ Color STD Pro"
+        return "Atlas MAX+ Color HQ"
+
+    return ""
+
+
+def find_avalanche1000_mapping_row(source_root: ET.Element, template_root: ET.Element | None = None) -> MappingRow | None:
+    _, rows = load_mapping_rows()
+    if not rows:
+        return None
+
+    source_setup = get_text(source_root, "SetApplied")
+    source_base_setup = get_text(source_root, "LastBaseSetupName")
+    source_media = get_text(source_root, "MediaName")
+    source_output_icc = get_text(source_root, "IccOutFileName")
+    source_input_rgb = get_text(source_root, "IccInRGBFileName")
+
+    source_setup_norm = normalize_lookup(source_setup)
+    source_base_setup_norm = normalize_lookup(source_base_setup)
+    source_media_norm = normalize_lookup(source_media)
+    source_output_norm = normalize_lookup(source_output_icc)
+    source_input_rgb_norm = normalize_lookup(source_input_rgb)
+
+    avalanche_rows = [
+        row
+        for row in rows
+        if row.source_family == "avalanche1000"
+        and families_are_compatible("plus", row.target_family)
+        and (row.target_setup or row.target_base_setup or row.target_media or row.target_output_icc)
+    ]
+
+    for row in avalanche_rows:
+        row_setup_norm = normalize_lookup(row.source_setup)
+        if not row_setup_norm:
+            continue
+        if source_setup_norm and row_setup_norm == source_setup_norm:
+            return row
+        if source_base_setup_norm and row_setup_norm == source_base_setup_norm:
+            return row
+
+    for row in avalanche_rows:
+        row_media_norm = normalize_lookup(row.source_media)
+        row_output_norm = normalize_lookup(row.source_output_icc)
+        if (
+            row_media_norm
+            and row_output_norm
+            and source_media_norm
+            and source_output_norm
+            and row_media_norm == source_media_norm
+            and row_output_norm == source_output_norm
+        ):
+            return row
+
+    best_row: MappingRow | None = None
+    best_score = -1
+    for row in avalanche_rows:
+        row_setup_norm = normalize_lookup(row.source_setup)
+        row_media_norm = normalize_lookup(row.source_media)
+        row_output_norm = normalize_lookup(row.source_output_icc)
+        row_input_rgb_norm = normalize_lookup(row.source_input_rgb)
+
+        score = 0
+        if row_setup_norm and source_setup_norm and (
+            row_setup_norm in source_setup_norm or source_setup_norm in row_setup_norm
+        ):
+            score += 250
+
+        if row_media_norm and source_media_norm:
+            if row_media_norm == source_media_norm:
+                score += 900
+            elif row_media_norm in source_media_norm or source_media_norm in row_media_norm:
+                score += 500
+
+        if row_output_norm and source_output_norm:
+            if row_output_norm == source_output_norm:
+                score += 250
+
+        if row_input_rgb_norm and source_input_rgb_norm:
+            if row_input_rgb_norm == source_input_rgb_norm:
+                score += 50
+
+        if score > best_score:
+            best_row = row
+            best_score = score
+
+    if best_row is not None and best_score >= 300:
+        return best_row
+
+    target_setup = infer_avalanche1000_plus_setup(source_root)
+    target_setup_norm = normalize_lookup(target_setup)
+    if target_setup_norm:
+        for row in avalanche_rows:
+            row_target_norm = normalize_lookup(row.target_base_setup or row.target_setup)
+            if row_target_norm == target_setup_norm:
+                return row
+
+    return None
+
+
+def avalanche1000_mapping_uses_fallback(source_root: ET.Element, mapping_row: MappingRow | None) -> bool:
+    if mapping_row is None:
+        return False
+
+    row_setup_norm = normalize_lookup(mapping_row.source_setup)
+    if not row_setup_norm:
+        return False
+
+    source_setup_norm = normalize_lookup(get_text(source_root, "SetApplied"))
+    source_base_setup_norm = normalize_lookup(get_text(source_root, "LastBaseSetupName"))
+    return row_setup_norm not in {source_setup_norm, source_base_setup_norm}
+
+
 def apply_mapping_row(target_root: ET.Element, mapping_row: MappingRow | None) -> None:
     if mapping_row is None:
         return
@@ -1204,7 +1441,9 @@ def detect_mapping_family(root: ET.Element | None) -> str | None:
 
     if "atlas max poly" in haystack or "maxpoly" in haystack or "atl poly" in haystack:
         return "poly"
-    if "av hd6" in haystack or "avhd6" in haystack:
+    if "avalanche 1000" in haystack or "avalanche1000" in haystack:
+        return "avalanche1000"
+    if "av hd6" in haystack or "avhd6" in haystack or "avalanche" in haystack:
         return "avhd6"
     if "atlas max+" in haystack or "atlas max plus" in haystack:
         return "plus"
@@ -1225,7 +1464,8 @@ def families_are_compatible(detected_family: str | None, row_family: str) -> boo
         "atlas": {"atlas", "plus"},
         "plus": {"plus", "atlas"},
         "max": {"max", "atlas", "plus"},
-        "avhd6": {"avhd6"},
+        "avhd6": {"avhd6", "avalanche1000"},
+        "avalanche1000": {"avalanche1000", "avhd6"},
     }
     return row_family in compatible_families.get(detected_family, {detected_family})
 
@@ -1237,6 +1477,8 @@ def get_cross_direction_families(direction: str) -> tuple[str, str]:
         return "atlas", "poly"
     if direction == "avhd6_to_plus":
         return "avhd6", "plus"
+    if direction == "avalanche1000_to_plus":
+        return "avalanche1000", "plus"
     if direction == "plus_to_avhd6":
         return "plus", "avhd6"
     return "poly", "plus"
@@ -1250,6 +1492,9 @@ def validate_cross_direction(
     expected_source_family, expected_target_family = get_cross_direction_families(direction)
     detected_source_family = detect_mapping_family(source_root)
     detected_target_family = detect_mapping_family(template_root)
+
+    if direction == "avalanche1000_to_plus" and get_text(source_root, "TableName") in AVALANCHE1000_PALLET_MAP:
+        detected_source_family = "avalanche1000"
 
     if detected_source_family and not families_are_compatible(detected_source_family, expected_source_family):
         return (
@@ -1470,7 +1715,7 @@ def get_canonical_atlas_targets(
 def apply_atlas_plus_setup_defaults(target_root: ET.Element, atlas_setup: str) -> None:
     if normalize_lookup(atlas_setup).startswith("atlas max+ light"):
         replace_simple_text(target_root, "WhitePass", "None")
-        replace_simple_text(target_root, "RenderingIntent", "Perceptual")
+        replace_simple_text(target_root, "RenderingIntent", "RelativeColorimetric")
 
 
 def sync_strip_geometry_from_root(target_root: ET.Element) -> None:
@@ -1529,6 +1774,20 @@ def apply_special_separation_rules(target_root: ET.Element) -> None:
         replace_simple_text(model, "Solid", config["solid"])
         replace_simple_text(model, "MaxCoverage", config["max_coverage"])
         replace_simple_text(model, "IsMaxCoverage", config["is_max_coverage"])
+        replace_simple_text(model, "ChannelIndex", config["channel_index"])
+
+
+def apply_atlas_plus_white_defaults(target_root: ET.Element) -> None:
+    for tag, value in ATLAS_PLUS_WHITE_DEFAULTS.items():
+        replace_simple_text(target_root, tag, value)
+    replace_simple_text(target_root, "RenderingIntent", "RelativeColorimetric")
+
+
+def apply_avalanche1000_pallet_mapping(source_root: ET.Element, target_root: ET.Element) -> None:
+    source_pallet = get_text(source_root, "TableName")
+    target_pallet = AVALANCHE1000_PALLET_MAP.get(source_pallet)
+    if target_pallet:
+        replace_simple_text(target_root, "TableName", target_pallet)
 
 
 def apply_cross_special_separation_rules(source_root: ET.Element, target_root: ET.Element) -> None:
@@ -1596,6 +1855,11 @@ def apply_offset_delta(root: ET.Element, x_delta: float, y_delta: float) -> None
             apply_delta_to_tag(strip, "YOffsetMM", y_delta)
 
 
+def apply_spray_amount_delta(root: ET.Element, spray_delta: float) -> None:
+    if spray_delta:
+        apply_delta_to_tag(root, "SprayAmount", spray_delta)
+
+
 def build_converted_root(
     source_root: ET.Element,
     template_tree: ET.ElementTree,
@@ -1605,6 +1869,7 @@ def build_converted_root(
     output_stem: str,
     x_delta: float,
     y_delta: float,
+    spray_delta: float,
 ) -> ET.Element:
     target_root = cast(ET.Element, copy.deepcopy(template_tree.getroot()))
     white_support_type = target_root.attrib.get("WhiteSupportType", "WBCICC")
@@ -1633,7 +1898,11 @@ def build_converted_root(
         apply_atlas_setup_mapping(target_root, atlas_setup_key)
     replace_simple_text(target_root, "IccInRGBFileName", "None")
     replace_simple_text(target_root, "IccInCMYKFileName", "None")
+    replace_simple_text(target_root, "TableName", VULCAN_OUTPUT_PALLET)
+    apply_special_separation_rules(target_root)
+    apply_atlas_plus_white_defaults(target_root)
 
+    apply_spray_amount_delta(target_root, spray_delta)
     apply_offset_delta(target_root, x_delta, y_delta)
     sync_strip_geometry_from_root(target_root)
     return target_root
@@ -1654,6 +1923,7 @@ def convert_one(
     set_name_mode: str,
     x_delta: float,
     y_delta: float,
+    spray_delta: float = 0.0,
 ) -> None:
     source_tree = load_xml(source_path)
     source_root = cast(ET.Element, source_tree.getroot())
@@ -1666,6 +1936,7 @@ def convert_one(
         output_stem=output_path.stem,
         x_delta=x_delta,
         y_delta=y_delta,
+        spray_delta=spray_delta,
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1683,19 +1954,44 @@ def build_preview(files: list[SourceItem], template_name: str, template_bytes: b
         try:
             root = parse_ksf_bytes(item.data)
             source_info = detect_profile(root)
-            mapping_row = find_legacy_mapping_row(root)
+            mixed_direction = route_mixed_plus_direction(root)
+            source_info["conversion_route"] = mixed_route_label(mixed_direction)
+            source_info["output_folder"] = f"converted/{mixed_route_output_folder(mixed_direction)}"
+            if mixed_direction == "avalanche1000_to_plus":
+                mapping_row = find_avalanche1000_mapping_row(root, template_root)
+            elif mixed_direction == "poly_to_plus":
+                mapping_row = find_mapping_row(
+                    root,
+                    template_root,
+                    expected_source_family="poly",
+                    expected_target_family="plus",
+                )
+            else:
+                mapping_row = find_legacy_mapping_row(root)
             if mapping_row is not None:
                 source_info["mapping_status"] = mapping_row.status or "mapped"
-                source_info["mapping_source"] = mapping_workbook_name or "mapping workbook"
-                source_info["mapped_atlas_setup"] = mapping_row.target_setup
+                if mixed_direction is None:
+                    source_info["mapping_source"] = mapping_workbook_name or "mapping workbook"
+                else:
+                    source_info["mapping_source"] = (
+                        f"{mixed_route_label(mixed_direction)} / {mapping_row.workbook_name} / {mapping_row.sheet_name}"
+                    )
+                    source_info["warnings"].append(
+                        f"Source does not look like Vulcan; {mixed_route_label(mixed_direction)} was selected."
+                    )
+                source_info["mapped_atlas_setup"] = mapping_row.target_base_setup or mapping_row.target_setup
                 source_info["mapped_atlas_media"] = mapping_row.target_media
                 source_info["mapped_atlas_output_icc"] = mapping_row.target_output_icc
             else:
                 source_info["mapping_status"] = "review"
-                source_info["mapping_source"] = "no spreadsheet match"
+                source_info["mapping_source"] = mixed_route_label(mixed_direction) if mixed_direction else "no spreadsheet match"
                 source_info["mapped_atlas_setup"] = ""
                 source_info["mapped_atlas_media"] = ""
                 source_info["mapped_atlas_output_icc"] = ""
+                if mixed_direction is not None:
+                    source_info["warnings"].append(
+                        f"Source does not look like Vulcan; {mixed_route_label(mixed_direction)} was selected but no reliable mapping was found."
+                    )
 
             items.append(
                 {
@@ -1731,6 +2027,39 @@ def build_preview(files: list[SourceItem], template_name: str, template_bytes: b
     }
 
 
+def route_mixed_plus_direction(source_root: ET.Element) -> str | None:
+    detected_family = detect_mapping_family(source_root)
+    if detected_family in {"avhd6", "avalanche1000"}:
+        return "avalanche1000_to_plus"
+    if detected_family == "poly":
+        return "poly_to_plus"
+    return None
+
+
+def mixed_route_label(direction: str | None) -> str:
+    labels = {
+        "avalanche1000_to_plus": "auto-routed Avalanche 1000 -> Plus",
+        "poly_to_plus": "auto-routed Poly -> Plus",
+    }
+    return labels.get(direction or "", "Vulcan -> Plus")
+
+
+def mixed_route_output_folder(direction: str | None) -> str:
+    folders = {
+        "avalanche1000_to_plus": "avalanche1000",
+        "poly_to_plus": "poly",
+    }
+    return folders.get(direction or "", "vulcan")
+
+
+def ensure_converted_output_is_mapped(converted_root: ET.Element, route_label: str) -> None:
+    set_applied = normalize_lookup(get_text(converted_root, "SetApplied"))
+    if set_applied == "test file":
+        raise ValueError(
+            f"{route_label} did not find a reliable mapping. Output would keep the template `Test File` setup."
+        )
+
+
 def convert_sources(
     source_parts: list[SourceItem],
     template_bytes: bytes,
@@ -1739,25 +2068,44 @@ def convert_sources(
     set_name_mode: str,
     x_delta: float,
     y_delta: float,
+    spray_delta: float,
 ) -> list[ConvertedItem]:
     template_root = parse_ksf_bytes(template_bytes)
     template_tree = ET.ElementTree(template_root)
     results: list[ConvertedItem] = []
 
     for source in source_parts:
-        output_path = Path("converted") / source.relative_path.name
+        output_path = Path("converted") / "needs-review" / source.relative_path.name
         try:
             source_root = parse_ksf_bytes(source.data)
-            converted_root = build_converted_root(
-                source_root=source_root,
-                template_tree=template_tree,
-                geometry_mode=geometry_mode,
-                copies_mode=copies_mode,
-                set_name_mode=set_name_mode,
-                output_stem=output_path.stem,
-                x_delta=x_delta,
-                y_delta=y_delta,
-            )
+            mixed_direction = route_mixed_plus_direction(source_root)
+            output_path = Path("converted") / mixed_route_output_folder(mixed_direction) / source.relative_path.name
+            if mixed_direction is None:
+                converted_root = build_converted_root(
+                    source_root=source_root,
+                    template_tree=template_tree,
+                    geometry_mode=geometry_mode,
+                    copies_mode=copies_mode,
+                    set_name_mode=set_name_mode,
+                    output_stem=output_path.stem,
+                    x_delta=x_delta,
+                    y_delta=y_delta,
+                    spray_delta=spray_delta,
+                )
+            else:
+                converted_root = build_converted_root_cross(
+                    source_root=source_root,
+                    template_tree=template_tree,
+                    direction=mixed_direction,
+                    geometry_mode=geometry_mode,
+                    copies_mode=copies_mode,
+                    set_name_mode=set_name_mode,
+                    output_stem=output_path.stem,
+                    x_delta=x_delta,
+                    y_delta=y_delta,
+                    spray_delta=spray_delta,
+                )
+            ensure_converted_output_is_mapped(converted_root, mixed_route_label(mixed_direction))
             results.append(
                 ConvertedItem(
                     relative_path=source.relative_path,
@@ -1791,6 +2139,7 @@ def build_converted_root_cross(
     output_stem: str,
     x_delta: float,
     y_delta: float,
+    spray_delta: float,
     pallet_override: str | None = None,
 ) -> ET.Element:
     target_root = cast(ET.Element, copy.deepcopy(template_tree.getroot()))
@@ -1817,16 +2166,27 @@ def build_converted_root_cross(
         raise ValueError(direction_error)
 
     expected_source_family, expected_target_family = get_cross_direction_families(direction)
-    mapping_row = find_mapping_row(
-        source_root,
-        target_root,
-        expected_source_family=expected_source_family,
-        expected_target_family=expected_target_family,
-    )
+    if direction == "avalanche1000_to_plus":
+        mapping_row = find_avalanche1000_mapping_row(source_root, target_root)
+    else:
+        mapping_row = find_mapping_row(
+            source_root,
+            target_root,
+            expected_source_family=expected_source_family,
+            expected_target_family=expected_target_family,
+        )
     if mapping_row is not None:
         apply_mapping_row(target_root, mapping_row)
 
-    apply_cross_special_separation_rules(source_root, target_root)
+    if expected_target_family == "plus":
+        replace_simple_text(target_root, "IccInRGBFileName", "None")
+        replace_simple_text(target_root, "IccInCMYKFileName", "None")
+        apply_special_separation_rules(target_root)
+        apply_atlas_plus_white_defaults(target_root)
+        if direction == "avalanche1000_to_plus":
+            apply_avalanche1000_pallet_mapping(source_root, target_root)
+    else:
+        apply_cross_special_separation_rules(source_root, target_root)
 
     if set_name_mode == "source-file":
         replace_simple_text(target_root, "SetApplied", output_stem)
@@ -1834,6 +2194,7 @@ def build_converted_root_cross(
     if pallet_override:
         replace_simple_text(target_root, "TableName", pallet_override)
 
+    apply_spray_amount_delta(target_root, spray_delta)
     apply_offset_delta(target_root, x_delta, y_delta)
     sync_strip_geometry_from_root(target_root)
     return target_root
@@ -1870,12 +2231,15 @@ def build_preview_cross(
                     }
                 )
                 continue
-            mapping_row = find_mapping_row(
-                root,
-                template_root,
-                expected_source_family=expected_source_family,
-                expected_target_family=expected_target_family,
-            )
+            if direction == "avalanche1000_to_plus":
+                mapping_row = find_avalanche1000_mapping_row(root, template_root)
+            else:
+                mapping_row = find_mapping_row(
+                    root,
+                    template_root,
+                    expected_source_family=expected_source_family,
+                    expected_target_family=expected_target_family,
+                )
             if mapping_row is not None:
                 source_info["mapping_status"] = mapping_row.status or "mapped"
                 source_info["mapping_source"] = f"{mapping_row.workbook_name} / {mapping_row.sheet_name}"
@@ -1883,6 +2247,10 @@ def build_preview_cross(
                 source_info["mapped_atlas_media"] = mapping_row.target_media
                 source_info["mapped_atlas_output_icc"] = mapping_row.target_output_icc
                 source_info["mapped_atlas_input_rgb"] = mapping_row.target_input_rgb
+                if direction == "avalanche1000_to_plus" and avalanche1000_mapping_uses_fallback(root, mapping_row):
+                    source_info["warnings"].append(
+                        "Source setup did not match a spreadsheet setup exactly; mapped by media/output profile fallback."
+                    )
             else:
                 source_info["mapping_status"] = "review"
                 source_info["mapping_source"] = mapping_workbook_name or "no spreadsheet match"
@@ -1932,6 +2300,7 @@ def convert_sources_cross(
     set_name_mode: str,
     x_delta: float,
     y_delta: float,
+    spray_delta: float,
     pallet_override: str | None = None,
 ) -> list[ConvertedItem]:
     template_root = parse_ksf_bytes(template_bytes)
@@ -1952,6 +2321,7 @@ def convert_sources_cross(
                 output_stem=output_path.stem,
                 x_delta=x_delta,
                 y_delta=y_delta,
+                spray_delta=spray_delta,
                 pallet_override=pallet_override,
             )
             results.append(
@@ -1982,9 +2352,23 @@ def build_conversion_report(preview: dict, converted_items: list[ConvertedItem])
     report_items = []
     for preview_item in preview["items"]:
         converted_item = status_map.get(preview_item["filename"])
+        source = preview_item.get("source") or {}
         report_items.append(
             {
-                **preview_item,
+                "filename": preview_item["filename"],
+                "origin": preview_item.get("origin"),
+                "analysis_status": preview_item.get("status"),
+                "mapping_status": source.get("mapping_status"),
+                "mapping_source": source.get("mapping_source"),
+                "conversion_route": source.get("conversion_route"),
+                "source_media": source.get("media_name"),
+                "source_setup": source.get("last_base_setup_name") or source.get("set_applied"),
+                "source_output_icc": source.get("icc_out"),
+                "mapped_target_setup": source.get("mapped_atlas_setup"),
+                "mapped_target_media": source.get("mapped_atlas_media"),
+                "mapped_target_output_icc": source.get("mapped_atlas_output_icc"),
+                "warnings": preview_item.get("warnings", []),
+                "analysis_error": preview_item.get("error"),
                 "conversion_status": converted_item.status if converted_item else "not-run",
                 "output_filename": converted_item.output_path.as_posix() if converted_item else None,
                 "conversion_error": converted_item.error if converted_item else None,
@@ -1993,7 +2377,12 @@ def build_conversion_report(preview: dict, converted_items: list[ConvertedItem])
 
     return {
         "template_filename": preview["template_filename"],
-        "template": preview["template"],
+        "template": {
+            "media_name": preview["template"].get("media_name"),
+            "set_applied": preview["template"].get("set_applied"),
+            "last_base_setup_name": preview["template"].get("last_base_setup_name"),
+            "icc_out": preview["template"].get("icc_out"),
+        },
         "items": report_items,
     }
 
@@ -2014,6 +2403,44 @@ def generate_zip_bundle(converted_items: list[ConvertedItem], report: dict) -> b
             zf.writestr(output_path.as_posix(), item.data)
         zf.writestr("converted/conversion-report.json", json.dumps(report, indent=2, ensure_ascii=False))
     return buffer.getvalue()
+
+
+def resolve_output_folder(folder_text: str) -> Path:
+    folder = Path(folder_text).expanduser()
+    if not folder.is_absolute():
+        folder = Path.cwd() / folder
+    return folder.resolve()
+
+
+def output_file_path_for_folder(base_folder: Path, item: ConvertedItem) -> Path:
+    relative_output = item.output_path
+    if relative_output.parts and relative_output.parts[0] == "converted":
+        relative_output = Path(*relative_output.parts[1:])
+    return base_folder / relative_output
+
+
+def save_converted_outputs_to_folder(
+    converted_items: list[ConvertedItem],
+    report: dict,
+    folder_text: str,
+) -> tuple[Path, int]:
+    output_folder = resolve_output_folder(folder_text)
+    if output_folder.exists() and not output_folder.is_dir():
+        raise NotADirectoryError(f"{output_folder} exists but is not a folder.")
+
+    output_folder.mkdir(parents=True, exist_ok=True)
+    written_count = 0
+    for item in converted_items:
+        if item.data is None:
+            continue
+        output_path = output_file_path_for_folder(output_folder, item)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(item.data)
+        written_count += 1
+
+    report_path = output_folder / "conversion-report.json"
+    report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    return output_folder, written_count
 
 
 def family_label(value: str) -> str:
@@ -2048,10 +2475,18 @@ def render_preview_legacy(preview: dict) -> None:
         for item in preview["items"]
         for warning in item["warnings"]
     ]
+    route_counts: dict[str, int] = {}
+    for item in preview["items"]:
+        if item["status"] == "error" or not item.get("source"):
+            continue
+        route = item["source"].get("conversion_route") or "Vulcan -> Plus"
+        route_counts[route] = route_counts.get(route, 0) + 1
     invalid_count = sum(1 for item in preview["items"] if item["status"] == "error")
     summary_parts = [f"{len(preview['items'])} file(s) analyzed"]
     if priority_warnings:
         summary_parts.append(f"{len(priority_warnings)} warning(s)")
+    if any(route != "Vulcan -> Plus" for route in route_counts):
+        summary_parts.append("mixed batch auto-routing")
     if invalid_count:
         summary_parts.append(f"{invalid_count} invalid file(s)")
 
@@ -2066,6 +2501,13 @@ def render_preview_legacy(preview: dict) -> None:
             f"Atlas template: {template['media_name'] or 'N/A'} | "
             f"Setup: {template['last_base_setup_name'] or template['set_applied'] or 'N/A'}"
         )
+        if route_counts:
+            route_summary = " | ".join(f"{route}: {count}" for route, count in route_counts.items())
+            st.caption(f"Routing summary: {route_summary}")
+        if any(route != "Vulcan -> Plus" for route in route_counts):
+            st.warning(
+                "Mixed batch detected. Files that do not look like Vulcan will be exported into route-specific ZIP folders."
+            )
 
         if priority_warnings:
             for filename, warning in priority_warnings:
@@ -2074,7 +2516,14 @@ def render_preview_legacy(preview: dict) -> None:
             st.success("No critical warnings detected in the initial analysis.")
 
         st.subheader("Analyzed files")
-        for item in preview["items"]:
+        visible_items = preview["items"][:PREVIEW_RENDER_LIMIT]
+        hidden_count = max(len(preview["items"]) - len(visible_items), 0)
+        if hidden_count:
+            st.caption(
+                f"Showing the first {len(visible_items)} analyzed file(s). "
+                f"{hidden_count} additional file(s) are included in the ZIP report."
+            )
+        for item in visible_items:
             with st.container(border=True):
                 top_a, top_b = st.columns([2.2, 1])
                 with top_a:
@@ -2086,11 +2535,13 @@ def render_preview_legacy(preview: dict) -> None:
                     st.write(
                         f"Source media: `{item['source']['media_name'] or 'N/A'}`  \n"
                         f"Source setup: `{item['source']['last_base_setup_name'] or item['source']['set_applied'] or 'N/A'}`  \n"
+                        f"Conversion route: `{item['source'].get('conversion_route') or 'Vulcan -> Plus'}`  \n"
+                        f"ZIP folder: `{item['source'].get('output_folder') or 'converted/vulcan'}`  \n"
                         f"Mapping source: `{item['source'].get('mapping_source') or 'N/A'}`  \n"
                         f"Mapped Atlas setup: `{item['source'].get('mapped_atlas_setup') or 'N/A'}`  \n"
                         f"Mapped Atlas media: `{item['source'].get('mapped_atlas_media') or 'N/A'}`  \n"
                         f"Mapped Atlas output ICC: `{item['source'].get('mapped_atlas_output_icc') or 'N/A'}`  \n"
-                        "Matching priority: Vulcan output ICC first, setup second, Vulcan media as support, and input profile as a light support signal. The spreadsheet is not treated as a strict horizontal all-fields-must-match rule. Special separations in the output are forced to: Qc = 25 solid, Qw = 65 max coverage, Iw = 25 solid, Ic = 25 solid."
+                        "Matching priority: Vulcan setup/base setup first, exact Media + Output ICC second, Output ICC alone as fallback, media as support, and input profile as a light support signal. The spreadsheet is not treated as a strict horizontal all-fields-must-match rule. Special separations in the output are forced to: Qw = 45 max coverage, Iw = 25 solid, Qc = 25 max coverage, Ic = 0 solid. White defaults are forced to Max White = 95, Whiteness = 85, Choke = 2 pixels, and Graded Edges = 2 pixels."
                     )
                 with top_b:
                     st.metric("Mapping status", (item["source"].get("mapping_status") or "review").upper())
@@ -2152,7 +2603,14 @@ def render_preview_cross(preview: dict) -> None:
             st.success("No critical warnings detected in the initial analysis.")
 
         st.subheader("Analyzed files")
-        for item in preview["items"]:
+        visible_items = preview["items"][:PREVIEW_RENDER_LIMIT]
+        hidden_count = max(len(preview["items"]) - len(visible_items), 0)
+        if hidden_count:
+            st.caption(
+                f"Showing the first {len(visible_items)} analyzed file(s). "
+                f"{hidden_count} additional file(s) are included in the ZIP report."
+            )
+        for item in visible_items:
             with st.container(border=True):
                 top_a, top_b = st.columns([2.2, 1])
                 with top_a:
@@ -2219,6 +2677,126 @@ def render_conversion_results(converted_items: list[ConvertedItem], report: dict
         st.success("All files were converted successfully. Download the ZIP package below.")
 
 
+@dataclass
+class GitCommandResult:
+    command: str
+    returncode: int
+    output: str
+
+
+def run_git_command(args: list[str], *, timeout: int = 30) -> GitCommandResult:
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    command = "git " + " ".join(args)
+    try:
+        completed = subprocess.run(
+            ["git", *args],
+            cwd=APP_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+            check=False,
+        )
+    except FileNotFoundError:
+        return GitCommandResult(command, 127, "git executable was not found on this machine.")
+    except subprocess.TimeoutExpired:
+        return GitCommandResult(command, 124, "Command timed out. Check GitHub authentication and network access.")
+
+    output = "\n".join(part.strip() for part in [completed.stdout, completed.stderr] if part.strip())
+    return GitCommandResult(command, completed.returncode, output)
+
+
+def get_git_output(args: list[str]) -> str | None:
+    result = run_git_command(args, timeout=10)
+    if result.returncode != 0:
+        return None
+    return result.output.strip()
+
+
+def get_git_sync_status() -> dict[str, Any]:
+    branch = get_git_output(["branch", "--show-current"]) or "unknown"
+    remote = get_git_output(["remote", "get-url", "origin"]) or "origin not configured"
+    status_output = get_git_output(["status", "--short"]) or ""
+    ahead = 0
+    behind = 0
+    counts = get_git_output(["rev-list", "--left-right", "--count", "@{upstream}...HEAD"])
+    if counts:
+        parts = counts.split()
+        if len(parts) == 2:
+            behind = int(parts[0])
+            ahead = int(parts[1])
+
+    return {
+        "branch": branch,
+        "remote": remote,
+        "status_lines": [line for line in status_output.splitlines() if line.strip()],
+        "ahead": ahead,
+        "behind": behind,
+    }
+
+
+def publish_repo_to_github(commit_message: str, *, include_new_files: bool) -> list[GitCommandResult]:
+    results: list[GitCommandResult] = []
+    status_before = get_git_sync_status()
+    if status_before["status_lines"]:
+        add_args = ["add", "-A"] if include_new_files else ["add", "-u"]
+        add_result = run_git_command(add_args)
+        results.append(add_result)
+        if add_result.returncode != 0:
+            return results
+
+        staged = get_git_output(["diff", "--cached", "--name-only"]) or ""
+        if staged.strip():
+            message = commit_message.strip() or f"App update {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            commit_result = run_git_command(["commit", "-m", message])
+            results.append(commit_result)
+            if commit_result.returncode != 0:
+                return results
+
+    push_result = run_git_command(["push"], timeout=60)
+    results.append(push_result)
+    return results
+
+
+def render_github_sync_panel() -> None:
+    st.sidebar.subheader("GitHub sync")
+    status = get_git_sync_status()
+    st.sidebar.caption(f"Branch: `{status['branch']}`")
+    st.sidebar.caption(f"Remote: `{status['remote']}`")
+    st.sidebar.caption(f"Pending local commits: `{status['ahead']}` | Remote commits not pulled: `{status['behind']}`")
+
+    if status["status_lines"]:
+        with st.sidebar.expander(f"Local changes ({len(status['status_lines'])})"):
+            st.code("\n".join(status["status_lines"][:30]), language="text")
+            if len(status["status_lines"]) > 30:
+                st.caption(f"{len(status['status_lines']) - 30} more file(s) not shown.")
+    else:
+        st.sidebar.caption("No uncommitted local changes.")
+
+    default_message = f"App update {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    commit_message = st.sidebar.text_input("Commit message", value=default_message, key="github_sync_commit_message")
+    include_new_files = st.sidebar.checkbox(
+        "Include new untracked files",
+        value=False,
+        help="Leave disabled to commit only files already tracked by git.",
+        key="github_sync_include_new_files",
+    )
+
+    if st.sidebar.button("Commit and push to GitHub", use_container_width=True, key="github_sync_push"):
+        results = publish_repo_to_github(commit_message, include_new_files=include_new_files)
+        failed = next((result for result in results if result.returncode != 0), None)
+        if failed:
+            st.sidebar.error(f"{failed.command} failed.")
+            st.sidebar.code(failed.output or "No output returned.", language="text")
+            if "Authentication failed" in failed.output or "terminal prompts disabled" in failed.output:
+                st.sidebar.warning("Configure GitHub authentication locally, then try again.")
+        else:
+            st.sidebar.success("Repository published to GitHub.")
+            with st.sidebar.expander("Git output"):
+                st.code("\n\n".join(result.output or result.command for result in results), language="text")
+
+
 def render_conversion_workspace(
     *,
     session_prefix: str,
@@ -2240,6 +2818,7 @@ def render_conversion_workspace(
     hero_title: str | None = None,
     hero_copy: str | None = None,
     hero_chips: list[str] | None = None,
+    download_file_name: str = "atlas-max-converted.zip",
 ) -> None:
     geometry_mode = "source"
     copies_mode = "source"
@@ -2380,10 +2959,28 @@ def render_conversion_workspace(
         active_workflow_info = (
             "Direction selected: AVHD6 -> Plus. The app reads AVHD6 source fields and searches the "
             "AVHD6_TO_PLUS sheet by Base Setup first, Media second, Output ICC third, and Input RGB as "
-            "a support signal. Once a reliable match is found, the full Atlas Max+ target package from that row is applied."
+            "a support signal. Once a reliable match is found, the full Atlas Max+ target package from that row is applied. "
+            "Plus output white and special-separation values are forced to match the approved Vulcan -> Plus flow."
         )
         active_default_template_name, active_default_template_bytes = load_preferred_template_bytes(
             PREFERRED_CROSS_TEMPLATE_NAMES["avhd6_to_plus"]
+        )
+    elif direction_value == "avalanche1000_to_plus":
+        active_preferred_template_names = PREFERRED_CROSS_TEMPLATE_NAMES["avalanche1000_to_plus"]
+        active_template_heading = "Atlas Max+ output template"
+        active_template_toggle_label = "Use built-in Atlas Max+ output template"
+        active_template_upload_caption = "Upload an Atlas Max+ KSF output template."
+        active_template_upload_label = "Atlas Max+ output template"
+        active_source_caption = "Upload one or more Avalanche 1000 KSF files to convert into Atlas Max+."
+        active_source_label = "Avalanche 1000 source files"
+        active_workflow_info = (
+            "Direction selected: Avalanche 1000 -> Plus. The app treats this as its own machine workflow, "
+            "while reading the AV HD6-style setup, media, output ICC, and input RGB fields used inside these KSFs. "
+            "It searches the AV1000 TO PLUS sheet and applies the mapped Atlas Max+ package. Known Plus setups use "
+            "their approved setup defaults while source geometry is preserved."
+        )
+        active_default_template_name, active_default_template_bytes = load_preferred_template_bytes(
+            PREFERRED_CROSS_TEMPLATE_NAMES["avalanche1000_to_plus"]
         )
     elif direction_value == "plus_to_avhd6":
         active_preferred_template_names = PREFERRED_CROSS_TEMPLATE_NAMES["plus_to_avhd6"]
@@ -2504,6 +3101,7 @@ def render_conversion_workspace(
     converted_items_key = f"{session_prefix}_converted_items"
     conversion_report_key = f"{session_prefix}_conversion_report"
     zip_bytes_key = f"{session_prefix}_zip_bytes"
+    saved_output_key = f"{session_prefix}_saved_output"
 
     render_kpis(source_parts, template_name, st.session_state.get(preview_key))
 
@@ -2531,6 +3129,32 @@ def render_conversion_workspace(
         st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
+    st.subheader("Spray adjustment")
+    spray_delta = st.number_input(
+        "SprayAmount delta",
+        value=0.0,
+        step=1.0,
+        help="Use positive values to increase SprayAmount, negative values to decrease it, or 0 to keep the source/template value.",
+        key=f"{session_prefix}_spray_delta",
+    )
+    st.caption(f"Output SprayAmount adjustment: `{spray_delta:+g}`")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
+    st.subheader("Output folder")
+    output_folder_key = f"{session_prefix}_output_folder"
+    output_folder_text = st.text_input(
+        "Save converted files to folder",
+        placeholder="Example: ~/Desktop/converted-ksf",
+        help="Optional. Enter the folder path where the converted KSF files should be saved. The ZIP download is still generated.",
+        key=output_folder_key,
+    ).strip()
+    st.caption(
+        "Optional local save path. The app creates the folder if needed and writes the converted KSF files plus `conversion-report.json`."
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
     st.subheader("Conversion workflow")
     st.info(active_workflow_info)
     st.caption("Output is always generated as a single ZIP package with the converted KSF files and `conversion-report.json`.")
@@ -2545,7 +3169,7 @@ def render_conversion_workspace(
         clear_clicked = st.button("Clear", use_container_width=True, key=f"{session_prefix}_clear")
 
     if clear_clicked:
-        for key in [preview_key, converted_items_key, conversion_report_key, zip_bytes_key]:
+        for key in [preview_key, converted_items_key, conversion_report_key, zip_bytes_key, saved_output_key]:
             st.session_state.pop(key, None)
         st.session_state[uploader_nonce_key] = uploader_nonce + 1
         safe_rerun()
@@ -2603,6 +3227,7 @@ def render_conversion_workspace(
                 set_name_mode=set_name_mode,
                 x_delta=float(x_delta),
                 y_delta=float(y_delta),
+                spray_delta=float(spray_delta),
             )
             if direction_value is not None:
                 convert_kwargs["direction"] = direction_value
@@ -2612,19 +3237,38 @@ def render_conversion_workspace(
             st.session_state[converted_items_key] = converted_items
             st.session_state[conversion_report_key] = report
             st.session_state[zip_bytes_key] = generate_zip_bundle(converted_items, report)
+            st.session_state.pop(saved_output_key, None)
+            if output_folder_text:
+                try:
+                    saved_folder, written_count = save_converted_outputs_to_folder(
+                        converted_items,
+                        report,
+                        output_folder_text,
+                    )
+                    st.session_state[saved_output_key] = {
+                        "folder": saved_folder.as_posix(),
+                        "count": written_count,
+                    }
+                except OSError as exc:
+                    st.error(f"Could not save to output folder: {exc}")
             success_count = sum(1 for item in converted_items if item.status == "converted")
             error_count = sum(1 for item in converted_items if item.status == "error")
             if success_count:
                 st.success(f"Conversion completed. Success: {success_count} | Failed: {error_count}")
+                saved_output = st.session_state.get(saved_output_key)
+                if saved_output:
+                    st.success(
+                        f"Saved {saved_output['count']} converted file(s) to `{saved_output['folder']}`."
+                    )
             else:
                 st.error("No files were converted successfully.")
 
     zip_bytes = st.session_state.get(zip_bytes_key)
     if zip_bytes:
         st.download_button(
-            "Download atlas-max-converted.zip",
+            f"Download {download_file_name}",
             data=zip_bytes,
-            file_name="atlas-max-converted.zip",
+            file_name=download_file_name,
             mime="application/zip",
             use_container_width=True,
             key=f"{session_prefix}_download",
@@ -2640,7 +3284,7 @@ def render_conversion_workspace(
 
 def main() -> None:
     st.set_page_config(
-        page_title="Atlas Max KSF Converter",
+        page_title="Vulcan to Plus KSF Converter",
         page_icon="🧩",
         layout="wide",
     )
@@ -3022,7 +3666,7 @@ def main() -> None:
         }
         div[data-baseweb="tab-list"] button {
             flex: 1 1 0;
-            min-width: 17rem;
+            min-width: 13rem;
             min-height: 4.1rem;
             border-radius: 999px !important;
             justify-content: center;
@@ -3051,6 +3695,11 @@ def main() -> None:
             border-color: rgba(196, 145, 41, 0.34) !important;
             color: #6e5312 !important;
         }
+        div[data-baseweb="tab-list"] button:nth-child(4) {
+            background: linear-gradient(180deg, rgba(230, 231, 255, 0.98) 0%, rgba(241, 242, 255, 0.88) 100%) !important;
+            border-color: rgba(99, 106, 202, 0.32) !important;
+            color: #3f4389 !important;
+        }
         div[data-baseweb="tab-list"] button[aria-selected="true"] {
             box-shadow: 0 10px 20px rgba(93, 104, 134, 0.10);
         }
@@ -3072,6 +3721,11 @@ def main() -> None:
             border-color: rgba(184, 132, 24, 0.40) !important;
             box-shadow: 0 10px 22px rgba(191, 145, 43, 0.16) !important;
         }
+        div[data-baseweb="tab-list"] button:nth-child(4):hover {
+            background: linear-gradient(180deg, rgba(218, 220, 255, 1) 0%, rgba(235, 236, 255, 0.92) 100%) !important;
+            border-color: rgba(91, 98, 190, 0.40) !important;
+            box-shadow: 0 10px 22px rgba(94, 101, 188, 0.16) !important;
+        }
         div[data-baseweb="tab-list"] button:first-child[aria-selected="true"] {
             background: linear-gradient(180deg, #ffbea8 0%, #f29d80 100%) !important;
             border-color: rgba(200, 93, 63, 0.48) !important;
@@ -3090,6 +3744,228 @@ def main() -> None:
             color: #5a4008 !important;
             box-shadow: 0 12px 24px rgba(187, 132, 24, 0.20) !important;
         }
+        div[data-baseweb="tab-list"] button:nth-child(4)[aria-selected="true"] {
+            background: linear-gradient(180deg, #c4c8ff 0%, #9097ed 100%) !important;
+            border-color: rgba(78, 86, 175, 0.46) !important;
+            color: #2f347c !important;
+            box-shadow: 0 12px 24px rgba(87, 94, 180, 0.20) !important;
+        }
+
+        /* Professional neutral theme overrides */
+        .stApp {
+            color: #1f2937;
+            background: linear-gradient(180deg, #f7f8fa 0%, #eef1f5 100%);
+        }
+        .block-container {
+            max-width: 1240px;
+        }
+        .hero-card,
+        .section-card,
+        .cross-section-card,
+        .theme-cross-card,
+        .theme-avhd6-card {
+            background: #ffffff !important;
+            border: 1px solid #d8dee7 !important;
+            border-radius: 12px !important;
+            box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06) !important;
+            backdrop-filter: none !important;
+        }
+        .hero-card {
+            border-top: 4px solid #1f4e79 !important;
+            padding: 1.2rem 1.35rem;
+        }
+        .hero-title {
+            color: #111827;
+            letter-spacing: 0;
+        }
+        .hero-subtitle,
+        p,
+        label,
+        .stCaption,
+        .stMarkdown,
+        .stText {
+            color: #4b5563;
+        }
+        h1,
+        h2,
+        h3,
+        .stSubheader,
+        .cross-workspace .stSubheader,
+        .theme-cross-workspace .stSubheader,
+        .theme-avhd6-workspace .stSubheader {
+            color: #111827;
+            letter-spacing: 0;
+        }
+        .cross-hero,
+        .theme-cross-hero,
+        .theme-avhd6-hero {
+            background: linear-gradient(135deg, #172033 0%, #1f4e79 100%) !important;
+            border: 1px solid #243b55 !important;
+            border-radius: 12px !important;
+            box-shadow: 0 14px 30px rgba(15, 23, 42, 0.16) !important;
+        }
+        .cross-hero-kicker,
+        .theme-avhd6-hero .cross-hero-kicker {
+            background: rgba(255, 255, 255, 0.10) !important;
+            border-color: rgba(255, 255, 255, 0.18) !important;
+            color: #dbeafe !important;
+            letter-spacing: 0.04em;
+        }
+        .cross-hero-title,
+        .theme-avhd6-hero .cross-hero-title {
+            color: #ffffff !important;
+            letter-spacing: 0;
+        }
+        .cross-hero-copy,
+        .theme-avhd6-hero .cross-hero-copy {
+            color: #d1d5db !important;
+        }
+        .cross-chip,
+        .theme-avhd6-hero .cross-chip {
+            background: rgba(255, 255, 255, 0.10) !important;
+            border-color: rgba(255, 255, 255, 0.18) !important;
+            color: #f9fafb !important;
+        }
+        div[data-testid="stMetric"],
+        .cross-workspace div[data-testid="stMetric"],
+        .theme-cross-workspace div[data-testid="stMetric"],
+        .theme-avhd6-workspace div[data-testid="stMetric"] {
+            background: #ffffff !important;
+            border: 1px solid #d8dee7 !important;
+            border-radius: 10px !important;
+            box-shadow: 0 6px 16px rgba(15, 23, 42, 0.05) !important;
+        }
+        div[data-testid="stFileUploader"],
+        .cross-workspace div[data-testid="stFileUploader"],
+        .theme-cross-workspace div[data-testid="stFileUploader"],
+        .theme-avhd6-workspace div[data-testid="stFileUploader"] {
+            background: #f8fafc !important;
+            border: 1px dashed #9ca3af !important;
+            border-radius: 10px !important;
+            box-shadow: none !important;
+        }
+        div[data-testid="stExpander"],
+        .cross-workspace div[data-testid="stExpander"],
+        .theme-cross-workspace div[data-testid="stExpander"],
+        .theme-avhd6-workspace div[data-testid="stExpander"] {
+            background: #ffffff !important;
+            border: 1px solid #d8dee7 !important;
+            border-radius: 10px !important;
+            box-shadow: 0 6px 16px rgba(15, 23, 42, 0.05) !important;
+        }
+        div[data-baseweb="radio"] label {
+            background: #f8fafc !important;
+            border: 1px solid #d8dee7 !important;
+            border-radius: 8px !important;
+            box-shadow: none !important;
+        }
+        div[data-baseweb="radio"] label:hover {
+            background: #eef2f7 !important;
+        }
+        div[data-testid="stButton"] > button,
+        .cross-workspace div[data-testid="stButton"] > button,
+        .theme-cross-workspace div[data-testid="stButton"] > button,
+        .theme-avhd6-workspace div[data-testid="stButton"] > button {
+            background: #ffffff !important;
+            color: #1f2937 !important;
+            border: 1px solid #aab4c3 !important;
+            border-radius: 8px !important;
+            box-shadow: 0 4px 10px rgba(15, 23, 42, 0.06) !important;
+        }
+        div[data-testid="stButton"] > button[kind="primary"],
+        .cross-workspace div[data-testid="stButton"] > button[kind="primary"],
+        .theme-cross-workspace div[data-testid="stButton"] > button[kind="primary"],
+        .theme-avhd6-workspace div[data-testid="stButton"] > button[kind="primary"] {
+            background: #1f4e79 !important;
+            color: #ffffff !important;
+            border-color: #1a4267 !important;
+        }
+        div[data-testid="stButton"] > button[kind="primary"] *,
+        .cross-workspace div[data-testid="stButton"] > button[kind="primary"] *,
+        .theme-cross-workspace div[data-testid="stButton"] > button[kind="primary"] *,
+        .theme-avhd6-workspace div[data-testid="stButton"] > button[kind="primary"] * {
+            color: #ffffff !important;
+        }
+        div[data-testid="stButton"] > button:not([kind="primary"]) *,
+        .cross-workspace div[data-testid="stButton"] > button:not([kind="primary"]) *,
+        .theme-cross-workspace div[data-testid="stButton"] > button:not([kind="primary"]) *,
+        .theme-avhd6-workspace div[data-testid="stButton"] > button:not([kind="primary"]) * {
+            color: #1f2937 !important;
+        }
+        div[data-testid="stDownloadButton"] > button,
+        .cross-workspace div[data-testid="stDownloadButton"] > button,
+        .theme-cross-workspace div[data-testid="stDownloadButton"] > button,
+        .theme-avhd6-workspace div[data-testid="stDownloadButton"] > button {
+            background: #0f766e !important;
+            color: #ffffff !important;
+            border: 1px solid #0d625c !important;
+            border-radius: 8px !important;
+            box-shadow: 0 4px 10px rgba(15, 118, 110, 0.16) !important;
+        }
+        div[data-testid="stDownloadButton"] > button *,
+        .cross-workspace div[data-testid="stDownloadButton"] > button *,
+        .theme-cross-workspace div[data-testid="stDownloadButton"] > button *,
+        .theme-avhd6-workspace div[data-testid="stDownloadButton"] > button * {
+            color: #ffffff !important;
+        }
+        div[data-testid="stButton"] > button:hover,
+        div[data-testid="stDownloadButton"] > button:hover,
+        .cross-workspace div[data-testid="stButton"] > button:hover,
+        .cross-workspace div[data-testid="stDownloadButton"] > button:hover {
+            transform: translateY(-1px);
+            filter: brightness(0.99);
+            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.10) !important;
+        }
+        div[data-baseweb="tab-list"] {
+            gap: 0.4rem;
+        }
+        div[data-baseweb="tab-list"] button,
+        div[data-baseweb="tab-list"] button:first-child,
+        div[data-baseweb="tab-list"] button:nth-child(2),
+        div[data-baseweb="tab-list"] button:nth-child(3),
+        div[data-baseweb="tab-list"] button:nth-child(4) {
+            min-height: 3.4rem;
+            border-radius: 8px !important;
+            background: #ffffff !important;
+            border: 1px solid #d8dee7 !important;
+            color: #374151 !important;
+            box-shadow: none !important;
+            letter-spacing: 0 !important;
+        }
+        div[data-baseweb="tab-list"] button:hover,
+        div[data-baseweb="tab-list"] button:first-child:hover,
+        div[data-baseweb="tab-list"] button:nth-child(2):hover,
+        div[data-baseweb="tab-list"] button:nth-child(3):hover,
+        div[data-baseweb="tab-list"] button:nth-child(4):hover {
+            background: #f3f6f9 !important;
+            border-color: #aab4c3 !important;
+            box-shadow: none !important;
+        }
+        div[data-baseweb="tab-list"] button[aria-selected="true"],
+        div[data-baseweb="tab-list"] button:first-child[aria-selected="true"],
+        div[data-baseweb="tab-list"] button:nth-child(2)[aria-selected="true"],
+        div[data-baseweb="tab-list"] button:nth-child(3)[aria-selected="true"],
+        div[data-baseweb="tab-list"] button:nth-child(4)[aria-selected="true"] {
+            background: #1f4e79 !important;
+            border-color: #1a4267 !important;
+            color: #ffffff !important;
+            box-shadow: 0 8px 18px rgba(31, 78, 121, 0.18) !important;
+        }
+        div[data-baseweb="tab-list"] button[aria-selected="true"] *,
+        div[data-baseweb="tab-list"] button:first-child[aria-selected="true"] *,
+        div[data-baseweb="tab-list"] button:nth-child(2)[aria-selected="true"] *,
+        div[data-baseweb="tab-list"] button:nth-child(3)[aria-selected="true"] *,
+        div[data-baseweb="tab-list"] button:nth-child(4)[aria-selected="true"] * {
+            color: #ffffff !important;
+        }
+        div[data-testid="stMarkdownContainer"] code,
+        .cross-workspace div[data-testid="stMarkdownContainer"] code,
+        .theme-cross-workspace div[data-testid="stMarkdownContainer"] code,
+        .theme-avhd6-workspace div[data-testid="stMarkdownContainer"] code {
+            background: #eef2f7 !important;
+            color: #1f2937 !important;
+            border-radius: 6px !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -3098,35 +3974,38 @@ def main() -> None:
     st.markdown(
         """
         <div class="hero-card">
-            <div class="hero-title">Atlas Max KSF Converter</div>
+            <div class="hero-title">Vulcan to Plus KSF Converter</div>
             <div class="hero-subtitle">
-                Professional KSF conversion tool with separate workflows for Vulcan to Atlas Max+,
-                Atlas Max family to Poly, and AVHD6 to Atlas Max+.
+                Professional KSF conversion tool focused on Vulcan to Atlas Max+,
+                Atlas Max family to Poly, AVHD6 to Atlas Max+, and Avalanche 1000 to Atlas Max+.
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    vulcan_tab, cross_tab, avhd6_tab = st.tabs(
-        ["Vulcan -> Atlas Max+", "Atlas Max+ <-> Poly", "AVHD6 <-> Atlas Max+"]
+    render_github_sync_panel()
+
+    vulcan_tab, cross_tab, avhd6_tab, avalanche1000_tab = st.tabs(
+        ["Vulcan -> Plus", "Atlas Max+ <-> Poly", "AVHD6 <-> Atlas Max+", "Avalanche 1000 -> Plus"]
     )
 
     with vulcan_tab:
         render_conversion_workspace(
             session_prefix="legacy",
             template_heading="Atlas template",
-            template_toggle_label="Use built-in Atlas Max template",
-            template_upload_caption="Upload a custom Atlas Max KSF template.",
-            template_upload_label="Atlas Max template",
-            source_caption="Upload one or more Vulcan KSF files to convert.",
+            template_toggle_label="Use built-in Plus template",
+            template_upload_caption="Upload a custom Atlas Max+ KSF template.",
+            template_upload_label="Atlas Max+ template",
+            source_caption="Upload the Vulcan KSF files to convert into Plus.",
             source_label="Vulcan source files",
-            workflow_info="The converted file uses the Atlas Max template only as the structural mirror. Mapping priority now follows this order: Vulcan output ICC first, setup second, Vulcan media as support, and input profile as a light support signal. The workbook is not treated as a strict horizontal row where every source field must match exactly. Atlas setup, Atlas media and Atlas output ICC come from the selected workbook row whenever a reliable match is found.",
-            analyze_error="Please provide at least one source file and a valid Atlas Max template.",
+            workflow_info="Current focus: Vulcan -> Plus. The converted file uses the Atlas Max+ template as the structural mirror. Mapping priority follows this order: Vulcan setup/base setup first, exact Media + Output ICC second, Output ICC alone as fallback, media as support, and input profile as a light support signal. Atlas setup, Atlas media and Atlas output ICC come from the selected workbook row whenever a reliable match is found.",
+            analyze_error="Please provide at least one Vulcan source file and a valid Atlas Max+ template.",
             build_preview_fn=build_preview,
             convert_sources_fn=convert_sources,
             render_preview_fn=render_preview_legacy,
             theme="legacy",
             theme_variant="legacy",
+            download_file_name="vulcan-to-plus-converted.zip",
         )
 
     with cross_tab:
@@ -3164,7 +4043,7 @@ def main() -> None:
             template_upload_label="Target KSF template",
             source_caption="Upload one or more AVHD6 or Atlas Max+ KSF files to convert.",
             source_label="AVHD6 / Atlas Max+ source files",
-            workflow_info="This workflow is dedicated to AVHD6 to Atlas Max+ and Atlas Max+ to AVHD6. It uses the dedicated workbook and searches the input KSF in this order: Base Setup first, Media second, Output ICC third, and Input RGB as a support signal. Once one reliable match identifies the row, the app applies the full mapped target values from that spreadsheet row.",
+            workflow_info="This workflow is dedicated to AVHD6 to Atlas Max+ and Atlas Max+ to AVHD6. It uses the dedicated workbook and searches the input KSF in this order: Base Setup first, Media second, Output ICC third, and Input RGB as a support signal. Plus output white and special-separation values follow the approved Vulcan -> Plus defaults.",
             analyze_error="Please provide at least one source file and a valid target template.",
             build_preview_fn=build_preview_cross,
             convert_sources_fn=convert_sources_cross,
@@ -3179,6 +4058,32 @@ def main() -> None:
             hero_title="AVHD6 <-> Atlas Max+ Mapping Station",
             hero_copy="Spreadsheet-driven conversion for AVHD6 and Atlas Max+ mappings. This workspace mirrors the cross-conversion flow and keeps directional mapping isolated for validation and controlled rollout.",
             hero_chips=["AVHD6 to Plus", "Plus to AVHD6", "Setup-First Match", "Template-Safe Output"],
+        )
+
+    with avalanche1000_tab:
+        render_conversion_workspace(
+            session_prefix="avalanche1000",
+            template_heading="Atlas Max+ output template",
+            template_toggle_label="Use built-in Atlas Max+ output template",
+            template_upload_caption="Upload a custom Atlas Max+ KSF template.",
+            template_upload_label="Atlas Max+ output template",
+            source_caption="Upload one or more Avalanche 1000 KSF files to convert into Plus.",
+            source_label="Avalanche 1000 source files",
+            workflow_info="This workflow is dedicated to Avalanche 1000 to Atlas Max+. It uses the AV1000 TO PLUS mapping sheet for setup, media, and output ICC, then applies the approved fixed Plus white and special-separation defaults while preserving source geometry.",
+            analyze_error="Please provide at least one Avalanche 1000 source file and a valid Atlas Max+ template.",
+            build_preview_fn=build_preview_cross,
+            convert_sources_fn=convert_sources_cross,
+            render_preview_fn=render_preview_cross,
+            theme="cross",
+            theme_variant="avalanche1000",
+            direction_options=[
+                ("Convert Avalanche 1000 -> Plus", "avalanche1000_to_plus"),
+            ],
+            hero_kicker="Dedicated Avalanche 1000 Workspace",
+            hero_title="Avalanche 1000 -> Atlas Max+",
+            hero_copy="Spreadsheet-driven conversion for the Avalanche 1000 KSF package. The app keeps this machine isolated from AVHD6 while preserving geometry and applying the fixed Plus output defaults.",
+            hero_chips=["Avalanche 1000", "Plus Output", "AV HD6 Field Mapping", "Fixed Plus Defaults"],
+            download_file_name="avalanche1000-to-plus-converted.zip",
         )
 
 
