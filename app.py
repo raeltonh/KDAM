@@ -3983,8 +3983,6 @@ def main() -> None:
         """,
         unsafe_allow_html=True,
     )
-    render_github_sync_panel()
-
     vulcan_tab, cross_tab, avhd6_tab, avalanche1000_tab = st.tabs(
         ["Vulcan -> Plus", "Atlas Max+ <-> Poly", "AVHD6 <-> Atlas Max+", "Avalanche 1000 -> Plus"]
     )
