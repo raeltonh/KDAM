@@ -535,6 +535,13 @@ def safe_rerun() -> None:
         experimental_rerun()
 
 
+def clear_workspace_state(session_prefix: str, uploader_nonce_key: str) -> None:
+    for key in list(st.session_state.keys()):
+        if key.startswith(f"{session_prefix}_") and key != uploader_nonce_key:
+            st.session_state.pop(key, None)
+    st.session_state[uploader_nonce_key] = int(st.session_state.get(uploader_nonce_key, 0)) + 1
+
+
 def dedupe_relative_path(relative_path: Path, used_paths: set[Path]) -> Path:
     candidate = relative_path
     counter = 2
@@ -3166,13 +3173,13 @@ def render_conversion_workspace(
     with action_b:
         convert_clicked = st.button("Convert and export ZIP", type="primary", use_container_width=True, key=f"{session_prefix}_convert")
     with action_c:
-        clear_clicked = st.button("Clear", use_container_width=True, key=f"{session_prefix}_clear")
-
-    if clear_clicked:
-        for key in [preview_key, converted_items_key, conversion_report_key, zip_bytes_key, saved_output_key]:
-            st.session_state.pop(key, None)
-        st.session_state[uploader_nonce_key] = uploader_nonce + 1
-        safe_rerun()
+        st.button(
+            "Clear",
+            use_container_width=True,
+            key=f"{session_prefix}_clear",
+            on_click=clear_workspace_state,
+            args=(session_prefix, uploader_nonce_key),
+        )
 
     if source_error:
         st.error(source_error)
