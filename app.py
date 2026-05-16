@@ -251,6 +251,16 @@ PREFERRED_CROSS_TEMPLATE_NAMES = {
         "approved_avhd6_output_template.ksf",
         "avhd6_output_template.ksf",
     ],
+    "plus_to_matrix": [
+        "approved_matrix_template.ksf",
+        "approved_matrix_output_template.ksf",
+        "matrix_output_template.ksf",
+    ],
+    "poly_to_matrix": [
+        "approved_matrix_template.ksf",
+        "approved_matrix_output_template.ksf",
+        "matrix_output_template.ksf",
+    ],
 }
 
 
@@ -272,6 +282,8 @@ LEGACY_MAPPING_WORKBOOK_NAMES = (
 
 CROSS_MAPPING_WORKBOOK_NAMES = (
     "atlas_max_plus_to_poly_mapping_template.xlsx",
+    "matrix_mapping_template.xlsx",
+    "plus_poly_to_matrix_mapping_template.xlsx",
 )
 
 PALLET_OVERRIDE_DEFAULT = "Use mapping value"
@@ -417,6 +429,46 @@ MAPPING_SHEET_DEFINITIONS = (
         target_input_rgb_headers=("POLY_INPUT_RGB",),
         target_input_cmyk_headers=("POLY_INPUT_CMYK",),
         target_pallet_headers=("POLY_PALLET",),
+        status_headers=("STATUS",),
+        auto_map_key_headers=("AUTO_MAP_KEY",),
+        notes_headers=("NOTES",),
+    ),
+    MappingSheetDefinition(
+        sheet_name="PLUS_TO_MATRIX",
+        source_family="plus",
+        target_family="matrix",
+        source_setup_headers=("PLUS_SETUP", "PLUS_BASE_SETUP", "SOURCE_SETUP", "SOURCE_BASE_SETUP"),
+        source_media_headers=("PLUS_MEDIA", "SOURCE_MEDIA"),
+        source_output_headers=("PLUS_OUTPUT_ICC", "SOURCE_OUTPUT_ICC", "OUTPUT_ICC"),
+        source_input_rgb_headers=("PLUS_INPUT_RGB", "SOURCE_INPUT_RGB", "INPUT_RGB"),
+        source_input_cmyk_headers=("PLUS_INPUT_CMYK", "SOURCE_INPUT_CMYK", "INPUT_CMYK"),
+        target_setup_headers=("MATRIX_SETUP", "MATRIX_BASE_SETUP", "TARGET_SETUP"),
+        target_base_setup_headers=("MATRIX_BASE_SETUP", "MATRIX_SETUP", "TARGET_BASE_SETUP"),
+        target_media_headers=("MATRIX_MEDIA", "TARGET_MEDIA"),
+        target_output_headers=("MATRIX_OUTPUT_ICC", "TARGET_OUTPUT_ICC"),
+        target_input_rgb_headers=("MATRIX_INPUT_RGB", "TARGET_INPUT_RGB"),
+        target_input_cmyk_headers=("MATRIX_INPUT_CMYK", "TARGET_INPUT_CMYK"),
+        target_pallet_headers=("MATRIX_PALLET", "TARGET_PALLET", "PALLET_MAPPING"),
+        status_headers=("STATUS",),
+        auto_map_key_headers=("AUTO_MAP_KEY",),
+        notes_headers=("NOTES",),
+    ),
+    MappingSheetDefinition(
+        sheet_name="POLY_TO_MATRIX",
+        source_family="poly",
+        target_family="matrix",
+        source_setup_headers=("POLY_SETUP", "POLY_BASE_SETUP", "SOURCE_SETUP", "SOURCE_BASE_SETUP"),
+        source_media_headers=("POLY_MEDIA", "SOURCE_MEDIA"),
+        source_output_headers=("POLY_OUTPUT_ICC", "SOURCE_OUTPUT_ICC", "OUTPUT_ICC"),
+        source_input_rgb_headers=("POLY_INPUT_RGB", "SOURCE_INPUT_RGB", "INPUT_RGB"),
+        source_input_cmyk_headers=("POLY_INPUT_CMYK", "SOURCE_INPUT_CMYK", "INPUT_CMYK"),
+        target_setup_headers=("MATRIX_SETUP", "MATRIX_BASE_SETUP", "TARGET_SETUP"),
+        target_base_setup_headers=("MATRIX_BASE_SETUP", "MATRIX_SETUP", "TARGET_BASE_SETUP"),
+        target_media_headers=("MATRIX_MEDIA", "TARGET_MEDIA"),
+        target_output_headers=("MATRIX_OUTPUT_ICC", "TARGET_OUTPUT_ICC"),
+        target_input_rgb_headers=("MATRIX_INPUT_RGB", "TARGET_INPUT_RGB"),
+        target_input_cmyk_headers=("MATRIX_INPUT_CMYK", "TARGET_INPUT_CMYK"),
+        target_pallet_headers=("MATRIX_PALLET", "TARGET_PALLET", "PALLET_MAPPING"),
         status_headers=("STATUS",),
         auto_map_key_headers=("AUTO_MAP_KEY",),
         notes_headers=("NOTES",),
@@ -1452,6 +1504,8 @@ def detect_mapping_family(root: ET.Element | None) -> str | None:
         return "avalanche1000"
     if "av hd6" in haystack or "avhd6" in haystack or "avalanche" in haystack:
         return "avhd6"
+    if "matrix" in haystack:
+        return "matrix"
     if "atlas max+" in haystack or "atlas max plus" in haystack:
         return "plus"
     if "vulcan" in haystack:
@@ -1473,6 +1527,7 @@ def families_are_compatible(detected_family: str | None, row_family: str) -> boo
         "max": {"max", "atlas", "plus"},
         "avhd6": {"avhd6", "avalanche1000"},
         "avalanche1000": {"avalanche1000", "avhd6"},
+        "matrix": {"matrix"},
     }
     return row_family in compatible_families.get(detected_family, {detected_family})
 
@@ -1488,6 +1543,10 @@ def get_cross_direction_families(direction: str) -> tuple[str, str]:
         return "avalanche1000", "plus"
     if direction == "plus_to_avhd6":
         return "plus", "avhd6"
+    if direction == "plus_to_matrix":
+        return "plus", "matrix"
+    if direction == "poly_to_matrix":
+        return "poly", "matrix"
     return "poly", "plus"
 
 
@@ -3005,6 +3064,38 @@ def render_conversion_workspace(
         active_default_template_name, active_default_template_bytes = load_preferred_template_bytes(
             PREFERRED_CROSS_TEMPLATE_NAMES["plus_to_avhd6"]
         )
+    elif direction_value == "plus_to_matrix":
+        active_preferred_template_names = PREFERRED_CROSS_TEMPLATE_NAMES["plus_to_matrix"]
+        active_template_heading = "Matrix output template"
+        active_template_toggle_label = "Use built-in Matrix output template"
+        active_template_upload_caption = "Upload a Matrix KSF output template."
+        active_template_upload_label = "Matrix output template"
+        active_source_caption = "Upload one or more Atlas Max+ KSF files to convert into Matrix."
+        active_source_label = "Atlas Max+ source files"
+        active_workflow_info = (
+            "Direction selected: Plus -> Matrix. The app reads Atlas Max+ source fields and searches the "
+            "PLUS_TO_MATRIX sheet by Base Setup first, Media second, Output ICC third, and Input RGB as "
+            "a support signal. Once a reliable match is found, the full Matrix target package from that row is applied."
+        )
+        active_default_template_name, active_default_template_bytes = load_preferred_template_bytes(
+            PREFERRED_CROSS_TEMPLATE_NAMES["plus_to_matrix"]
+        )
+    elif direction_value == "poly_to_matrix":
+        active_preferred_template_names = PREFERRED_CROSS_TEMPLATE_NAMES["poly_to_matrix"]
+        active_template_heading = "Matrix output template"
+        active_template_toggle_label = "Use built-in Matrix output template"
+        active_template_upload_caption = "Upload a Matrix KSF output template."
+        active_template_upload_label = "Matrix output template"
+        active_source_caption = "Upload one or more Poly KSF files to convert into Matrix."
+        active_source_label = "Poly source files"
+        active_workflow_info = (
+            "Direction selected: Poly -> Matrix. The app reads Poly source fields and searches the "
+            "POLY_TO_MATRIX sheet by Base Setup first, Media second, Output ICC third, and Input RGB as "
+            "a support signal. Once a reliable match is found, the full Matrix target package from that row is applied."
+        )
+        active_default_template_name, active_default_template_bytes = load_preferred_template_bytes(
+            PREFERRED_CROSS_TEMPLATE_NAMES["poly_to_matrix"]
+        )
 
     top_left, top_right = st.columns([1.5, 1])
     with top_left:
@@ -3984,14 +4075,22 @@ def main() -> None:
             <div class="hero-title">Vulcan to Plus KSF Converter</div>
             <div class="hero-subtitle">
                 Professional KSF conversion tool focused on Vulcan to Atlas Max+,
-                Atlas Max family to Poly, AVHD6 to Atlas Max+, and Avalanche 1000 to Atlas Max+.
+                Atlas Max family to Poly, AVHD6 to Atlas Max+, Avalanche 1000 to Atlas Max+,
+                and Matrix conversion workflows.
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    vulcan_tab, cross_tab, avhd6_tab, avalanche1000_tab = st.tabs(
-        ["Vulcan -> Plus", "Atlas Max+ <-> Poly", "AVHD6 <-> Atlas Max+", "Avalanche 1000 -> Plus"]
+    vulcan_tab, cross_tab, avhd6_tab, avalanche1000_tab, plus_matrix_tab, poly_matrix_tab = st.tabs(
+        [
+            "Vulcan -> Plus",
+            "Atlas Max+ <-> Poly",
+            "AVHD6 <-> Atlas Max+",
+            "Avalanche 1000 -> Plus",
+            "Plus -> Matrix",
+            "Poly -> Matrix",
+        ]
     )
 
     with vulcan_tab:
@@ -4089,6 +4188,58 @@ def main() -> None:
             hero_copy="Spreadsheet-driven conversion for the Avalanche 1000 KSF package. The app keeps this machine isolated from AVHD6 while preserving geometry and applying the fixed Plus output defaults.",
             hero_chips=["Avalanche 1000", "Plus Output", "AV HD6 Field Mapping", "Fixed Plus Defaults"],
             download_file_name="avalanche1000-to-plus-converted.zip",
+        )
+
+    with plus_matrix_tab:
+        render_conversion_workspace(
+            session_prefix="plus_matrix",
+            template_heading="Matrix output template",
+            template_toggle_label="Use built-in Matrix output template",
+            template_upload_caption="Upload a custom Matrix KSF template.",
+            template_upload_label="Matrix output template",
+            source_caption="Upload one or more Atlas Max+ KSF files to convert into Matrix.",
+            source_label="Atlas Max+ source files",
+            workflow_info="This workflow is dedicated to Atlas Max+ to Matrix conversion. It uses the PLUS_TO_MATRIX mapping sheet and searches the input KSF in this order: Base Setup first, Media second, Output ICC third, and Input RGB as a support signal.",
+            analyze_error="Please provide at least one Atlas Max+ source file and a valid Matrix template.",
+            build_preview_fn=build_preview_cross,
+            convert_sources_fn=convert_sources_cross,
+            render_preview_fn=render_preview_cross,
+            theme="cross",
+            theme_variant="cross",
+            direction_options=[
+                ("Convert Plus -> Matrix", "plus_to_matrix"),
+            ],
+            hero_kicker="Dedicated Matrix Workspace",
+            hero_title="Atlas Max+ -> Matrix",
+            hero_copy="Spreadsheet-driven conversion for Atlas Max+ files targeting Matrix output. This workspace is ready for the Matrix setup, media, ICC, and pallet mapping sheet.",
+            hero_chips=["Plus to Matrix", "Matrix Template", "Setup-First Match", "Template-Safe Output"],
+            download_file_name="plus-to-matrix-converted.zip",
+        )
+
+    with poly_matrix_tab:
+        render_conversion_workspace(
+            session_prefix="poly_matrix",
+            template_heading="Matrix output template",
+            template_toggle_label="Use built-in Matrix output template",
+            template_upload_caption="Upload a custom Matrix KSF template.",
+            template_upload_label="Matrix output template",
+            source_caption="Upload one or more Poly KSF files to convert into Matrix.",
+            source_label="Poly source files",
+            workflow_info="This workflow is dedicated to Poly to Matrix conversion. It uses the POLY_TO_MATRIX mapping sheet and searches the input KSF in this order: Base Setup first, Media second, Output ICC third, and Input RGB as a support signal.",
+            analyze_error="Please provide at least one Poly source file and a valid Matrix template.",
+            build_preview_fn=build_preview_cross,
+            convert_sources_fn=convert_sources_cross,
+            render_preview_fn=render_preview_cross,
+            theme="cross",
+            theme_variant="cross",
+            direction_options=[
+                ("Convert Poly -> Matrix", "poly_to_matrix"),
+            ],
+            hero_kicker="Dedicated Matrix Workspace",
+            hero_title="Poly -> Matrix",
+            hero_copy="Spreadsheet-driven conversion for Poly files targeting Matrix output. This workspace is ready for the Matrix setup, media, ICC, and pallet mapping sheet.",
+            hero_chips=["Poly to Matrix", "Matrix Template", "Setup-First Match", "Template-Safe Output"],
+            download_file_name="poly-to-matrix-converted.zip",
         )
 
 
