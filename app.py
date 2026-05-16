@@ -334,6 +334,7 @@ MATRIX_PALLET_MODE_OPTIONS = [
 MATRIX_RSS_PALLET_MAP = {
     "Atlas - Standard": "RSS - 15.9x19.9",
     "Atlas MATRIX - Standard": "RSS - 15.9x19.9",
+    "RSS 15.9x19.9": "RSS - 15.9x19.9",
     "Standard pallet": "RSS - 15.9x19.9",
     "Standard pallet poly": "RSS - 15.9x19.9",
     "Atlas - Youth and Ladies": "RSS - 11x15",
