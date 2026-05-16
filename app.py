@@ -2251,6 +2251,9 @@ def build_converted_root_cross(
         apply_atlas_plus_white_defaults(target_root)
         if direction == "avalanche1000_to_plus":
             apply_avalanche1000_pallet_mapping(source_root, target_root)
+    elif expected_target_family == "matrix":
+        replace_simple_text(target_root, "IccInRGBFileName", "None")
+        replace_simple_text(target_root, "IccInCMYKFileName", "None")
     else:
         apply_cross_special_separation_rules(source_root, target_root)
 
