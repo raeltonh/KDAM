@@ -434,7 +434,7 @@ MAPPING_SHEET_DEFINITIONS = (
         notes_headers=("NOTES",),
     ),
     MappingSheetDefinition(
-        sheet_name="PLUS_TO_MATRIX",
+        sheet_name="PLUS TO MATRIX",
         source_family="plus",
         target_family="matrix",
         source_setup_headers=("PLUS_SETUP", "PLUS_BASE_SETUP", "SOURCE_SETUP", "SOURCE_BASE_SETUP"),
@@ -448,13 +448,13 @@ MAPPING_SHEET_DEFINITIONS = (
         target_output_headers=("MATRIX_OUTPUT_ICC", "TARGET_OUTPUT_ICC"),
         target_input_rgb_headers=("MATRIX_INPUT_RGB", "TARGET_INPUT_RGB"),
         target_input_cmyk_headers=("MATRIX_INPUT_CMYK", "TARGET_INPUT_CMYK"),
-        target_pallet_headers=("MATRIX_PALLET", "TARGET_PALLET", "PALLET_MAPPING"),
+        target_pallet_headers=("MATRIX_PALLET", "POLY_PALLET", "TARGET_PALLET", "PALLET_MAPPING"),
         status_headers=("STATUS",),
         auto_map_key_headers=("AUTO_MAP_KEY",),
         notes_headers=("NOTES",),
     ),
     MappingSheetDefinition(
-        sheet_name="POLY_TO_MATRIX",
+        sheet_name="POLY TO MATRIX",
         source_family="poly",
         target_family="matrix",
         source_setup_headers=("POLY_SETUP", "POLY_BASE_SETUP", "SOURCE_SETUP", "SOURCE_BASE_SETUP"),
@@ -468,7 +468,7 @@ MAPPING_SHEET_DEFINITIONS = (
         target_output_headers=("MATRIX_OUTPUT_ICC", "TARGET_OUTPUT_ICC"),
         target_input_rgb_headers=("MATRIX_INPUT_RGB", "TARGET_INPUT_RGB"),
         target_input_cmyk_headers=("MATRIX_INPUT_CMYK", "TARGET_INPUT_CMYK"),
-        target_pallet_headers=("MATRIX_PALLET", "TARGET_PALLET", "PALLET_MAPPING"),
+        target_pallet_headers=("MATRIX_PALLET", "POLY_PALLET", "TARGET_PALLET", "PALLET_MAPPING"),
         status_headers=("STATUS",),
         auto_map_key_headers=("AUTO_MAP_KEY",),
         notes_headers=("NOTES",),
@@ -3077,7 +3077,7 @@ def render_conversion_workspace(
         active_source_label = "Atlas Max+ source files"
         active_workflow_info = (
             "Direction selected: Plus -> Matrix. The app reads Atlas Max+ source fields and searches the "
-            "PLUS_TO_MATRIX sheet by Base Setup first, Media second, Output ICC third, and Input RGB as "
+            "PLUS TO MATRIX sheet by Base Setup first, Media second, Output ICC third, and Input RGB as "
             "a support signal. Once a reliable match is found, the full Matrix target package from that row is applied."
         )
         active_default_template_name, active_default_template_bytes = load_preferred_template_bytes(
@@ -3093,7 +3093,7 @@ def render_conversion_workspace(
         active_source_label = "Poly source files"
         active_workflow_info = (
             "Direction selected: Poly -> Matrix. The app reads Poly source fields and searches the "
-            "POLY_TO_MATRIX sheet by Base Setup first, Media second, Output ICC third, and Input RGB as "
+            "POLY TO MATRIX sheet by Base Setup first, Media second, Output ICC third, and Input RGB as "
             "a support signal. Once a reliable match is found, the full Matrix target package from that row is applied."
         )
         active_default_template_name, active_default_template_bytes = load_preferred_template_bytes(
@@ -4202,7 +4202,7 @@ def main() -> None:
             template_upload_label="Matrix output template",
             source_caption="Upload one or more Atlas Max+ KSF files to convert into Matrix.",
             source_label="Atlas Max+ source files",
-            workflow_info="This workflow is dedicated to Atlas Max+ to Matrix conversion. It uses the PLUS_TO_MATRIX mapping sheet and searches the input KSF in this order: Base Setup first, Media second, Output ICC third, and Input RGB as a support signal.",
+            workflow_info="This workflow is dedicated to Atlas Max+ to Matrix conversion. It uses the PLUS TO MATRIX mapping sheet and searches the input KSF in this order: Base Setup first, Media second, Output ICC third, and Input RGB as a support signal.",
             analyze_error="Please provide at least one Atlas Max+ source file and a valid Matrix template.",
             build_preview_fn=build_preview_cross,
             convert_sources_fn=convert_sources_cross,
@@ -4228,7 +4228,7 @@ def main() -> None:
             template_upload_label="Matrix output template",
             source_caption="Upload one or more Poly KSF files to convert into Matrix.",
             source_label="Poly source files",
-            workflow_info="This workflow is dedicated to Poly to Matrix conversion. It uses the POLY_TO_MATRIX mapping sheet and searches the input KSF in this order: Base Setup first, Media second, Output ICC third, and Input RGB as a support signal.",
+            workflow_info="This workflow is dedicated to Poly to Matrix conversion. It uses the POLY TO MATRIX mapping sheet and searches the input KSF in this order: Base Setup first, Media second, Output ICC third, and Input RGB as a support signal.",
             analyze_error="Please provide at least one Poly source file and a valid Matrix template.",
             build_preview_fn=build_preview_cross,
             convert_sources_fn=convert_sources_cross,
