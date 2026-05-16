@@ -323,6 +323,29 @@ AVALANCHE1000_PALLET_MAP = {
     "Standard pallet poly": "RSS - 15.9x19.9",
 }
 
+MATRIX_PALLET_MODE_MAPPING = "Use spreadsheet pallet"
+MATRIX_PALLET_MODE_RSS = "Convert known names to RSS"
+MATRIX_PALLET_MODE_TEMPLATE = "Keep Matrix template pallet"
+MATRIX_PALLET_MODE_OPTIONS = [
+    MATRIX_PALLET_MODE_MAPPING,
+    MATRIX_PALLET_MODE_RSS,
+    MATRIX_PALLET_MODE_TEMPLATE,
+]
+MATRIX_RSS_PALLET_MAP = {
+    "Atlas - Standard": "RSS - 15.9x19.9",
+    "Atlas MATRIX - Standard": "RSS - 15.9x19.9",
+    "Standard pallet": "RSS - 15.9x19.9",
+    "Standard pallet poly": "RSS - 15.9x19.9",
+    "Atlas - Youth and Ladies": "RSS - 11x15",
+    "Atlas - Youth And Ladies Neck Tag": "RSS - 11x15",
+    "Atlas - Children (L)": "RSS - 10.6x13.2",
+    "Children pallet small": "RSS - 10.6x13.2",
+    "Children pallet V3 (spring) Large": "RSS - 11x15",
+    "Children pallet V3 (spring) Small": "RSS - 10.6x13.2",
+    "Atlas - Zipper hoodie": "RSS - 15.9x14.25",
+    "Atlas - Neck Tag": "RSS - 15.9x19.9",
+}
+
 VULCAN_OUTPUT_PALLET = "RSS - 15.9x19.9"
 PREVIEW_RENDER_LIMIT = 100
 
@@ -1856,6 +1879,24 @@ def apply_avalanche1000_pallet_mapping(source_root: ET.Element, target_root: ET.
         replace_simple_text(target_root, "TableName", target_pallet)
 
 
+def apply_matrix_pallet_mode(
+    target_root: ET.Element,
+    template_root: ET.Element,
+    pallet_mode: str,
+) -> None:
+    if pallet_mode == MATRIX_PALLET_MODE_TEMPLATE:
+        template_pallet = get_text(template_root, "TableName")
+        if template_pallet:
+            replace_simple_text(target_root, "TableName", template_pallet)
+        return
+
+    if pallet_mode == MATRIX_PALLET_MODE_RSS:
+        current_pallet = get_text(target_root, "TableName")
+        rss_pallet = MATRIX_RSS_PALLET_MAP.get(current_pallet)
+        if rss_pallet:
+            replace_simple_text(target_root, "TableName", rss_pallet)
+
+
 def apply_cross_special_separation_rules(source_root: ET.Element, target_root: ET.Element) -> None:
     source_specials = source_root.find("SpecialSeparations")
     target_specials = target_root.find("SpecialSeparations")
@@ -2207,8 +2248,10 @@ def build_converted_root_cross(
     y_delta: float,
     spray_delta: float,
     pallet_override: str | None = None,
+    matrix_pallet_mode: str = MATRIX_PALLET_MODE_MAPPING,
 ) -> ET.Element:
     target_root = cast(ET.Element, copy.deepcopy(template_tree.getroot()))
+    template_root = cast(ET.Element, template_tree.getroot())
     white_support_type = target_root.attrib.get("WhiteSupportType", "WBCICC")
     target_root.attrib.clear()
     for key, value in ROOT_ATTRS.items():
@@ -2254,6 +2297,7 @@ def build_converted_root_cross(
     elif expected_target_family == "matrix":
         replace_simple_text(target_root, "IccInRGBFileName", "None")
         replace_simple_text(target_root, "IccInCMYKFileName", "None")
+        apply_matrix_pallet_mode(target_root, template_root, matrix_pallet_mode)
     else:
         apply_cross_special_separation_rules(source_root, target_root)
 
@@ -2371,6 +2415,7 @@ def convert_sources_cross(
     y_delta: float,
     spray_delta: float,
     pallet_override: str | None = None,
+    matrix_pallet_mode: str = MATRIX_PALLET_MODE_MAPPING,
 ) -> list[ConvertedItem]:
     template_root = parse_ksf_bytes(template_bytes)
     template_tree = ET.ElementTree(template_root)
@@ -2392,6 +2437,7 @@ def convert_sources_cross(
                 y_delta=y_delta,
                 spray_delta=spray_delta,
                 pallet_override=pallet_override,
+                matrix_pallet_mode=matrix_pallet_mode,
             )
             results.append(
                 ConvertedItem(
@@ -3207,10 +3253,13 @@ def render_conversion_workspace(
     render_kpis(source_parts, template_name, st.session_state.get(preview_key))
 
     selected_pallet_override: str | None = None
+    selected_matrix_pallet_mode = MATRIX_PALLET_MODE_MAPPING
     show_pallet_override = False
+    show_matrix_pallet_mode = False
     if direction_value is not None:
         _, expected_target_family = get_cross_direction_families(direction_value)
         show_pallet_override = expected_target_family == "poly"
+        show_matrix_pallet_mode = expected_target_family == "matrix"
 
     if show_pallet_override:
         st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
@@ -3227,6 +3276,28 @@ def render_conversion_workspace(
             st.caption(f"Output KSF files will use TableName: `{selected_pallet_override}`")
         else:
             st.caption("Output KSF files will use the pallet from the mapping spreadsheet.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    if show_matrix_pallet_mode:
+        st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
+        st.subheader("Matrix pallet mode")
+        selected_matrix_pallet_mode = st.selectbox(
+            "Matrix pallet naming",
+            options=MATRIX_PALLET_MODE_OPTIONS,
+            index=0,
+            help=(
+                "Use spreadsheet pallet keeps the TableName from the Matrix mapping row. "
+                "Convert known names to RSS changes supported legacy names such as Standard pallet to RSS names. "
+                "Keep Matrix template pallet restores the pallet from the selected Matrix template."
+            ),
+            key=f"{session_prefix}_matrix_pallet_mode",
+        )
+        if selected_matrix_pallet_mode == MATRIX_PALLET_MODE_RSS:
+            st.caption("Known legacy pallet names will be converted to RSS names in the Matrix output.")
+        elif selected_matrix_pallet_mode == MATRIX_PALLET_MODE_TEMPLATE:
+            st.caption("Output KSF files will keep the TableName from the Matrix template.")
+        else:
+            st.caption("Output KSF files will use the pallet value from the Matrix mapping spreadsheet.")
         st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
@@ -3333,6 +3404,7 @@ def render_conversion_workspace(
             if direction_value is not None:
                 convert_kwargs["direction"] = direction_value
                 convert_kwargs["pallet_override"] = selected_pallet_override
+                convert_kwargs["matrix_pallet_mode"] = selected_matrix_pallet_mode
             converted_items = convert_sources_fn(**convert_kwargs)
             report = build_conversion_report(preview, converted_items)
             st.session_state[converted_items_key] = converted_items
