@@ -3469,6 +3469,10 @@ def render_conversion_workspace(
         for name in target_separation_names:
             default_config = SPECIAL_SEPARATION_RULES.get(name, {})
             template_defaults = template_separation_defaults.get(name, {})
+            is_max_default = (
+                template_defaults.get("IsMaxCoverage")
+                or default_config.get("is_max_coverage", "false")
+            ).lower() == "true"
             edit_channel = st.checkbox(
                 f"Override {name}",
                 value=False,
@@ -3476,7 +3480,7 @@ def render_conversion_workspace(
             )
             if not edit_channel:
                 continue
-            col_enable, col_solid, col_max, col_is_max, col_channel = st.columns([0.8, 1, 1, 1, 1])
+            col_enable, col_mode, col_value = st.columns([0.8, 1.2, 1])
             default_enable = template_defaults.get("Enable", "true").lower() == "true"
             with col_enable:
                 enable = st.checkbox(
@@ -3484,43 +3488,33 @@ def render_conversion_workspace(
                     value=default_enable,
                     key=f"{session_prefix}_sep_{name}_enable",
                 )
-            with col_solid:
-                solid = st.number_input(
-                    "Solid",
-                    value=float(template_defaults.get("Solid") or default_config.get("solid", "0")),
+            with col_mode:
+                coverage_mode = st.radio(
+                    "Mode",
+                    options=["Max coverage", "Solid"],
+                    index=0 if is_max_default else 1,
+                    horizontal=True,
+                    key=f"{session_prefix}_sep_{name}_mode",
+                )
+            with col_value:
+                default_value = (
+                    template_defaults.get("MaxCoverage")
+                    or default_config.get("max_coverage", "0")
+                    if coverage_mode == "Max coverage"
+                    else template_defaults.get("Solid") or default_config.get("solid", "0")
+                )
+                separation_value = st.number_input(
+                    "Value",
+                    value=float(default_value),
                     step=1.0,
-                    key=f"{session_prefix}_sep_{name}_solid",
+                    key=f"{session_prefix}_sep_{name}_value",
                 )
-            with col_max:
-                max_coverage = st.number_input(
-                    "Max coverage",
-                    value=float(template_defaults.get("MaxCoverage") or default_config.get("max_coverage", "0")),
-                    step=1.0,
-                    key=f"{session_prefix}_sep_{name}_max",
-                )
-            with col_is_max:
-                is_max_default = (
-                    template_defaults.get("IsMaxCoverage")
-                    or default_config.get("is_max_coverage", "false")
-                ).lower() == "true"
-                is_max_coverage = st.checkbox(
-                    "Is max",
-                    value=is_max_default,
-                    key=f"{session_prefix}_sep_{name}_is_max",
-                )
-            with col_channel:
-                channel_index = st.number_input(
-                    "Channel",
-                    value=int(float(template_defaults.get("ChannelIndex") or default_config.get("channel_index", "0"))),
-                    step=1,
-                    key=f"{session_prefix}_sep_{name}_channel",
-                )
+            is_max_coverage = coverage_mode == "Max coverage"
             custom_values[name] = {
                 "Enable": "true" if enable else "false",
-                "Solid": format_number(float(solid), str(solid)),
-                "MaxCoverage": format_number(float(max_coverage), str(max_coverage)),
+                "Solid": "0" if is_max_coverage else format_number(float(separation_value), str(separation_value)),
+                "MaxCoverage": format_number(float(separation_value), str(separation_value)) if is_max_coverage else "0",
                 "IsMaxCoverage": "true" if is_max_coverage else "false",
-                "ChannelIndex": str(int(channel_index)),
             }
         selected_custom_separations = custom_values or None
         if selected_custom_separations is None:
