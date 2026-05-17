@@ -187,6 +187,17 @@ SPECIAL_SEPARATION_RULES = {
     "Ic": {"solid": "0", "max_coverage": "0", "is_max_coverage": "false", "channel_index": "0"},
 }
 
+SEPARATION_MODE_STANDARD = "Use app standard values"
+SEPARATION_MODE_SOURCE = "Use source file values"
+SEPARATION_MODE_CUSTOM = "Customize values"
+SEPARATION_MODE_OPTIONS = [
+    SEPARATION_MODE_STANDARD,
+    SEPARATION_MODE_SOURCE,
+    SEPARATION_MODE_CUSTOM,
+]
+SPECIAL_SEPARATION_VALUE_TAGS = ("Enable", "Solid", "MaxCoverage", "IsMaxCoverage", "ChannelIndex")
+MATRIX_SPECIAL_SEPARATION_NAMES = ("DB", "Wsp", "Qwb", "Iwb", "Qw", "Iw", "Qc", "Ic")
+
 ATLAS_PLUS_WHITE_DEFAULTS = {
     "WhiteTransparency": "25",
     "WBCMaxOpacity": "95",
@@ -1867,6 +1878,79 @@ def apply_special_separation_rules(target_root: ET.Element) -> None:
         replace_simple_text(model, "ChannelIndex", config["channel_index"])
 
 
+def special_separation_models(root: ET.Element) -> dict[str, ET.Element]:
+    special_separations = root.find("SpecialSeparations")
+    if special_separations is None:
+        return {}
+    return {
+        model.findtext("Name", default="").strip(): model
+        for model in special_separations.findall("SpecialSepModel")
+        if model.findtext("Name", default="").strip()
+    }
+
+
+def apply_source_special_separations(source_root: ET.Element, target_root: ET.Element) -> None:
+    source_models = special_separation_models(source_root)
+    target_models = special_separation_models(target_root)
+    if not source_models or not target_models:
+        return
+
+    for name, target_model in target_models.items():
+        source_model = source_models.get(name)
+        if source_model is None:
+            continue
+        for tag in SPECIAL_SEPARATION_VALUE_TAGS:
+            value = get_text(source_model, tag)
+            if value:
+                replace_simple_text(target_model, tag, value)
+
+
+def apply_custom_special_separations(
+    target_root: ET.Element,
+    custom_separations: dict[str, dict[str, str]] | None,
+) -> None:
+    if not custom_separations:
+        return
+
+    special_separations = target_root.find("SpecialSeparations")
+    if special_separations is None:
+        return
+
+    target_models = special_separation_models(target_root)
+    for name, config in custom_separations.items():
+        model = target_models.get(name)
+        if model is None:
+            model = ET.SubElement(special_separations, "SpecialSepModel")
+            ET.SubElement(model, "Name").text = name
+            ET.SubElement(model, "GradedEdgeOrStrokePixelsAmount").text = "4"
+            ET.SubElement(model, "GradedEdgeOrStrokeLevel").text = "30"
+            ET.SubElement(model, "DefaultGradedEdgeOrStrokePixelsAmount").text = "4"
+            ET.SubElement(model, "DefaultGradedEdgeOrStrokeLevel").text = "30"
+        for tag in SPECIAL_SEPARATION_VALUE_TAGS:
+            value = config.get(tag)
+            if value is not None:
+                replace_simple_text(model, tag, value)
+
+
+def apply_special_separation_mode(
+    source_root: ET.Element,
+    target_root: ET.Element,
+    target_family: str,
+    separation_mode: str,
+    custom_separations: dict[str, dict[str, str]] | None,
+) -> None:
+    if separation_mode == SEPARATION_MODE_SOURCE:
+        apply_source_special_separations(source_root, target_root)
+        return
+    if separation_mode == SEPARATION_MODE_CUSTOM:
+        apply_custom_special_separations(target_root, custom_separations)
+        return
+    if target_family == "plus":
+        apply_special_separation_rules(target_root)
+    elif target_family not in {"matrix"}:
+        apply_cross_special_separation_rules(source_root, target_root)
+
+
 def apply_atlas_plus_white_defaults(target_root: ET.Element) -> None:
     for tag, value in ATLAS_PLUS_WHITE_DEFAULTS.items():
         replace_simple_text(target_root, tag, value)
@@ -1978,6 +2062,8 @@ def build_converted_root(
     x_delta: float,
     y_delta: float,
     spray_delta: float,
+    separation_mode: str = SEPARATION_MODE_STANDARD,
+    custom_separations: dict[str, dict[str, str]] | None = None,
 ) -> ET.Element:
     target_root = cast(ET.Element, copy.deepcopy(template_tree.getroot()))
     white_support_type = target_root.attrib.get("WhiteSupportType", "WBCICC")
@@ -2007,7 +2093,13 @@ def build_converted_root(
     replace_simple_text(target_root, "IccInRGBFileName", "None")
     replace_simple_text(target_root, "IccInCMYKFileName", "None")
     replace_simple_text(target_root, "TableName", VULCAN_OUTPUT_PALLET)
-    apply_special_separation_rules(target_root)
+    apply_special_separation_mode(
+        source_root,
+        target_root,
+        "plus",
+        separation_mode,
+        custom_separations,
+    )
     apply_atlas_plus_white_defaults(target_root)
 
     apply_spray_amount_delta(target_root, spray_delta)
@@ -2045,6 +2137,8 @@ def convert_one(
         x_delta=x_delta,
         y_delta=y_delta,
         spray_delta=spray_delta,
+        separation_mode=SEPARATION_MODE_STANDARD,
+        custom_separations=None,
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2177,6 +2271,8 @@ def convert_sources(
     x_delta: float,
     y_delta: float,
     spray_delta: float,
+    separation_mode: str = SEPARATION_MODE_STANDARD,
+    custom_separations: dict[str, dict[str, str]] | None = None,
 ) -> list[ConvertedItem]:
     template_root = parse_ksf_bytes(template_bytes)
     template_tree = ET.ElementTree(template_root)
@@ -2199,6 +2295,8 @@ def convert_sources(
                     x_delta=x_delta,
                     y_delta=y_delta,
                     spray_delta=spray_delta,
+                    separation_mode=separation_mode,
+                    custom_separations=custom_separations,
                 )
             else:
                 converted_root = build_converted_root_cross(
@@ -2212,6 +2310,8 @@ def convert_sources(
                     x_delta=x_delta,
                     y_delta=y_delta,
                     spray_delta=spray_delta,
+                    separation_mode=separation_mode,
+                    custom_separations=custom_separations,
                 )
             ensure_converted_output_is_mapped(converted_root, mixed_route_label(mixed_direction))
             results.append(
@@ -2250,6 +2350,8 @@ def build_converted_root_cross(
     spray_delta: float,
     pallet_override: str | None = None,
     matrix_pallet_mode: str = MATRIX_PALLET_MODE_MAPPING,
+    separation_mode: str = SEPARATION_MODE_STANDARD,
+    custom_separations: dict[str, dict[str, str]] | None = None,
 ) -> ET.Element:
     target_root = cast(ET.Element, copy.deepcopy(template_tree.getroot()))
     template_root = cast(ET.Element, template_tree.getroot())
@@ -2291,7 +2393,13 @@ def build_converted_root_cross(
     if expected_target_family == "plus":
         replace_simple_text(target_root, "IccInRGBFileName", "None")
         replace_simple_text(target_root, "IccInCMYKFileName", "None")
-        apply_special_separation_rules(target_root)
+        apply_special_separation_mode(
+            source_root,
+            target_root,
+            expected_target_family,
+            separation_mode,
+            custom_separations,
+        )
         apply_atlas_plus_white_defaults(target_root)
         if direction == "avalanche1000_to_plus":
             apply_avalanche1000_pallet_mapping(source_root, target_root)
@@ -2299,8 +2407,21 @@ def build_converted_root_cross(
         replace_simple_text(target_root, "IccInRGBFileName", "None")
         replace_simple_text(target_root, "IccInCMYKFileName", "None")
         apply_matrix_pallet_mode(target_root, template_root, matrix_pallet_mode)
+        apply_special_separation_mode(
+            source_root,
+            target_root,
+            expected_target_family,
+            separation_mode,
+            custom_separations,
+        )
     else:
-        apply_cross_special_separation_rules(source_root, target_root)
+        apply_special_separation_mode(
+            source_root,
+            target_root,
+            expected_target_family,
+            separation_mode,
+            custom_separations,
+        )
 
     if set_name_mode == "source-file":
         replace_simple_text(target_root, "SetApplied", output_stem)
@@ -2417,6 +2538,8 @@ def convert_sources_cross(
     spray_delta: float,
     pallet_override: str | None = None,
     matrix_pallet_mode: str = MATRIX_PALLET_MODE_MAPPING,
+    separation_mode: str = SEPARATION_MODE_STANDARD,
+    custom_separations: dict[str, dict[str, str]] | None = None,
 ) -> list[ConvertedItem]:
     template_root = parse_ksf_bytes(template_bytes)
     template_tree = ET.ElementTree(template_root)
@@ -2439,6 +2562,8 @@ def convert_sources_cross(
                 spray_delta=spray_delta,
                 pallet_override=pallet_override,
                 matrix_pallet_mode=matrix_pallet_mode,
+                separation_mode=separation_mode,
+                custom_separations=custom_separations,
             )
             results.append(
                 ConvertedItem(
@@ -3255,12 +3380,15 @@ def render_conversion_workspace(
 
     selected_pallet_override: str | None = None
     selected_matrix_pallet_mode = MATRIX_PALLET_MODE_MAPPING
+    selected_separation_mode = SEPARATION_MODE_STANDARD
+    selected_custom_separations: dict[str, dict[str, str]] | None = None
     show_pallet_override = False
     show_matrix_pallet_mode = False
+    expected_target_family_for_controls = "plus"
     if direction_value is not None:
-        _, expected_target_family = get_cross_direction_families(direction_value)
-        show_pallet_override = expected_target_family == "poly"
-        show_matrix_pallet_mode = expected_target_family == "matrix"
+        _, expected_target_family_for_controls = get_cross_direction_families(direction_value)
+        show_pallet_override = expected_target_family_for_controls == "poly"
+        show_matrix_pallet_mode = expected_target_family_for_controls == "matrix"
 
     if show_pallet_override:
         st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
@@ -3302,6 +3430,104 @@ def render_conversion_workspace(
         st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
+    st.subheader("Channel separations")
+    selected_separation_mode = st.radio(
+        "Separation values",
+        options=SEPARATION_MODE_OPTIONS,
+        index=0,
+        horizontal=True,
+        help=(
+            "Use app standard values keeps the approved defaults currently used by this app. "
+            "Use source file values copies matching channel separation values from the uploaded KSF. "
+            "Customize values lets you override selected channels for this conversion."
+        ),
+        key=f"{session_prefix}_separation_mode",
+    )
+    if selected_separation_mode == SEPARATION_MODE_STANDARD:
+        st.caption("Output KSF files will use the app's approved channel separation defaults.")
+    elif selected_separation_mode == SEPARATION_MODE_SOURCE:
+        st.caption("Output KSF files will copy matching channel separation values from each source KSF.")
+    else:
+        target_separation_names = (
+            MATRIX_SPECIAL_SEPARATION_NAMES
+            if expected_target_family_for_controls == "matrix"
+            else tuple(SPECIAL_SEPARATION_RULES.keys())
+        )
+        template_separation_defaults: dict[str, dict[str, str]] = {}
+        if template_bytes:
+            try:
+                template_root_for_defaults = parse_ksf_bytes(template_bytes)
+                for name, model in special_separation_models(template_root_for_defaults).items():
+                    template_separation_defaults[name] = {
+                        tag: get_text(model, tag)
+                        for tag in SPECIAL_SEPARATION_VALUE_TAGS
+                    }
+            except ET.ParseError:
+                template_separation_defaults = {}
+
+        custom_values: dict[str, dict[str, str]] = {}
+        for name in target_separation_names:
+            default_config = SPECIAL_SEPARATION_RULES.get(name, {})
+            template_defaults = template_separation_defaults.get(name, {})
+            edit_channel = st.checkbox(
+                f"Override {name}",
+                value=False,
+                key=f"{session_prefix}_sep_{name}_enabled",
+            )
+            if not edit_channel:
+                continue
+            col_enable, col_solid, col_max, col_is_max, col_channel = st.columns([0.8, 1, 1, 1, 1])
+            default_enable = template_defaults.get("Enable", "true").lower() == "true"
+            with col_enable:
+                enable = st.checkbox(
+                    "Enable",
+                    value=default_enable,
+                    key=f"{session_prefix}_sep_{name}_enable",
+                )
+            with col_solid:
+                solid = st.number_input(
+                    "Solid",
+                    value=float(template_defaults.get("Solid") or default_config.get("solid", "0")),
+                    step=1.0,
+                    key=f"{session_prefix}_sep_{name}_solid",
+                )
+            with col_max:
+                max_coverage = st.number_input(
+                    "Max coverage",
+                    value=float(template_defaults.get("MaxCoverage") or default_config.get("max_coverage", "0")),
+                    step=1.0,
+                    key=f"{session_prefix}_sep_{name}_max",
+                )
+            with col_is_max:
+                is_max_default = (
+                    template_defaults.get("IsMaxCoverage")
+                    or default_config.get("is_max_coverage", "false")
+                ).lower() == "true"
+                is_max_coverage = st.checkbox(
+                    "Is max",
+                    value=is_max_default,
+                    key=f"{session_prefix}_sep_{name}_is_max",
+                )
+            with col_channel:
+                channel_index = st.number_input(
+                    "Channel",
+                    value=int(float(template_defaults.get("ChannelIndex") or default_config.get("channel_index", "0"))),
+                    step=1,
+                    key=f"{session_prefix}_sep_{name}_channel",
+                )
+            custom_values[name] = {
+                "Enable": "true" if enable else "false",
+                "Solid": format_number(float(solid), str(solid)),
+                "MaxCoverage": format_number(float(max_coverage), str(max_coverage)),
+                "IsMaxCoverage": "true" if is_max_coverage else "false",
+                "ChannelIndex": str(int(channel_index)),
+            }
+        selected_custom_separations = custom_values or None
+        if selected_custom_separations is None:
+            st.caption("Select one or more channels to customize.")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
     st.subheader("Spray adjustment")
     spray_delta = st.number_input(
         "SprayAmount delta",
@@ -3333,12 +3559,10 @@ def render_conversion_workspace(
     st.caption("Output is always generated as a single ZIP package with the converted KSF files and `conversion-report.json`.")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    action_a, action_b, action_c = st.columns([1, 1.2, 0.8])
+    action_a, action_b = st.columns([1.2, 0.8])
     with action_a:
-        analyze_clicked = st.button("Analyze files", use_container_width=True, key=f"{session_prefix}_analyze")
-    with action_b:
         convert_clicked = st.button("Convert and export ZIP", type="primary", use_container_width=True, key=f"{session_prefix}_convert")
-    with action_c:
+    with action_b:
         st.button(
             "Clear",
             use_container_width=True,
@@ -3351,24 +3575,6 @@ def render_conversion_workspace(
         st.error(source_error)
     for issue in source_collection_issues:
         st.error(issue)
-
-    if analyze_clicked:
-        if not source_parts or not template_bytes:
-            if not source_parts and source_error:
-                st.error(source_error)
-            else:
-                st.error(analyze_error)
-        else:
-            resolved_template_name = template_name or "atlas-template.ksf"
-            if direction_value is None:
-                st.session_state[preview_key] = build_preview_fn(source_parts, resolved_template_name, template_bytes)
-            else:
-                st.session_state[preview_key] = build_preview_fn(
-                    source_parts,
-                    resolved_template_name,
-                    template_bytes,
-                    direction_value,
-                )
 
     preview = st.session_state.get(preview_key)
     if preview:
@@ -3406,6 +3612,8 @@ def render_conversion_workspace(
                 convert_kwargs["direction"] = direction_value
                 convert_kwargs["pallet_override"] = selected_pallet_override
                 convert_kwargs["matrix_pallet_mode"] = selected_matrix_pallet_mode
+            convert_kwargs["separation_mode"] = selected_separation_mode
+            convert_kwargs["custom_separations"] = selected_custom_separations
             converted_items = convert_sources_fn(**convert_kwargs)
             report = build_conversion_report(preview, converted_items)
             st.session_state[converted_items_key] = converted_items
