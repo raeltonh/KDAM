@@ -198,6 +198,16 @@ SEPARATION_MODE_OPTIONS = [
 SPECIAL_SEPARATION_VALUE_TAGS = ("Enable", "Solid", "MaxCoverage", "IsMaxCoverage", "ChannelIndex")
 MATRIX_SPECIAL_SEPARATION_NAMES = ("DB", "Wsp", "Qwb", "Iwb", "Qw", "Iw", "Qc", "Ic")
 
+WHITE_SETTING_MODE_STANDARD = "Use app/template standard values"
+WHITE_SETTING_MODE_SOURCE = "Use source file values"
+WHITE_SETTING_MODE_CUSTOM = "Customize values"
+WHITE_SETTING_MODE_OPTIONS = [
+    WHITE_SETTING_MODE_STANDARD,
+    WHITE_SETTING_MODE_SOURCE,
+    WHITE_SETTING_MODE_CUSTOM,
+]
+WHITE_SETTING_TAGS = ("WBCMaxOpacity", "WBCLUTMaxWhite", "WBCWhiteness")
+
 ATLAS_PLUS_WHITE_DEFAULTS = {
     "WhiteTransparency": "25",
     "WBCMaxOpacity": "95",
@@ -1957,6 +1967,45 @@ def apply_atlas_plus_white_defaults(target_root: ET.Element) -> None:
     replace_simple_text(target_root, "RenderingIntent", "RelativeColorimetric")
 
 
+def copy_white_settings(source_root: ET.Element, target_root: ET.Element) -> None:
+    for tag in WHITE_SETTING_TAGS:
+        value = get_text(source_root, tag)
+        if value:
+            replace_simple_text(target_root, tag, value)
+
+
+def apply_custom_white_settings(
+    target_root: ET.Element,
+    custom_white_settings: dict[str, str] | None,
+) -> None:
+    if not custom_white_settings:
+        return
+    for tag in WHITE_SETTING_TAGS:
+        value = custom_white_settings.get(tag)
+        if value is not None:
+            replace_simple_text(target_root, tag, value)
+
+
+def apply_white_setting_mode(
+    source_root: ET.Element,
+    target_root: ET.Element,
+    template_root: ET.Element,
+    target_family: str,
+    white_setting_mode: str,
+    custom_white_settings: dict[str, str] | None,
+) -> None:
+    if white_setting_mode == WHITE_SETTING_MODE_SOURCE:
+        copy_white_settings(source_root, target_root)
+        return
+    if white_setting_mode == WHITE_SETTING_MODE_CUSTOM:
+        apply_custom_white_settings(target_root, custom_white_settings)
+        return
+    if target_family == "plus":
+        apply_atlas_plus_white_defaults(target_root)
+    elif target_family == "matrix":
+        copy_white_settings(template_root, target_root)
+
+
 def apply_avalanche1000_pallet_mapping(source_root: ET.Element, target_root: ET.Element) -> None:
     source_pallet = get_text(source_root, "TableName")
     target_pallet = AVALANCHE1000_PALLET_MAP.get(source_pallet)
@@ -2064,8 +2113,11 @@ def build_converted_root(
     spray_delta: float,
     separation_mode: str = SEPARATION_MODE_STANDARD,
     custom_separations: dict[str, dict[str, str]] | None = None,
+    white_setting_mode: str = WHITE_SETTING_MODE_STANDARD,
+    custom_white_settings: dict[str, str] | None = None,
 ) -> ET.Element:
     target_root = cast(ET.Element, copy.deepcopy(template_tree.getroot()))
+    template_root = cast(ET.Element, template_tree.getroot())
     white_support_type = target_root.attrib.get("WhiteSupportType", "WBCICC")
     target_root.attrib.clear()
     for key, value in ROOT_ATTRS.items():
@@ -2100,7 +2152,14 @@ def build_converted_root(
         separation_mode,
         custom_separations,
     )
-    apply_atlas_plus_white_defaults(target_root)
+    apply_white_setting_mode(
+        source_root,
+        target_root,
+        template_root,
+        "plus",
+        white_setting_mode,
+        custom_white_settings,
+    )
 
     apply_spray_amount_delta(target_root, spray_delta)
     apply_offset_delta(target_root, x_delta, y_delta)
@@ -2139,6 +2198,8 @@ def convert_one(
         spray_delta=spray_delta,
         separation_mode=SEPARATION_MODE_STANDARD,
         custom_separations=None,
+        white_setting_mode=WHITE_SETTING_MODE_STANDARD,
+        custom_white_settings=None,
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2273,6 +2334,8 @@ def convert_sources(
     spray_delta: float,
     separation_mode: str = SEPARATION_MODE_STANDARD,
     custom_separations: dict[str, dict[str, str]] | None = None,
+    white_setting_mode: str = WHITE_SETTING_MODE_STANDARD,
+    custom_white_settings: dict[str, str] | None = None,
 ) -> list[ConvertedItem]:
     template_root = parse_ksf_bytes(template_bytes)
     template_tree = ET.ElementTree(template_root)
@@ -2297,6 +2360,8 @@ def convert_sources(
                     spray_delta=spray_delta,
                     separation_mode=separation_mode,
                     custom_separations=custom_separations,
+                    white_setting_mode=white_setting_mode,
+                    custom_white_settings=custom_white_settings,
                 )
             else:
                 converted_root = build_converted_root_cross(
@@ -2312,6 +2377,8 @@ def convert_sources(
                     spray_delta=spray_delta,
                     separation_mode=separation_mode,
                     custom_separations=custom_separations,
+                    white_setting_mode=white_setting_mode,
+                    custom_white_settings=custom_white_settings,
                 )
             ensure_converted_output_is_mapped(converted_root, mixed_route_label(mixed_direction))
             results.append(
@@ -2352,6 +2419,8 @@ def build_converted_root_cross(
     matrix_pallet_mode: str = MATRIX_PALLET_MODE_MAPPING,
     separation_mode: str = SEPARATION_MODE_STANDARD,
     custom_separations: dict[str, dict[str, str]] | None = None,
+    white_setting_mode: str = WHITE_SETTING_MODE_STANDARD,
+    custom_white_settings: dict[str, str] | None = None,
 ) -> ET.Element:
     target_root = cast(ET.Element, copy.deepcopy(template_tree.getroot()))
     template_root = cast(ET.Element, template_tree.getroot())
@@ -2400,7 +2469,14 @@ def build_converted_root_cross(
             separation_mode,
             custom_separations,
         )
-        apply_atlas_plus_white_defaults(target_root)
+        apply_white_setting_mode(
+            source_root,
+            target_root,
+            template_root,
+            expected_target_family,
+            white_setting_mode,
+            custom_white_settings,
+        )
         if direction == "avalanche1000_to_plus":
             apply_avalanche1000_pallet_mapping(source_root, target_root)
     elif expected_target_family == "matrix":
@@ -2413,6 +2489,14 @@ def build_converted_root_cross(
             expected_target_family,
             separation_mode,
             custom_separations,
+        )
+        apply_white_setting_mode(
+            source_root,
+            target_root,
+            template_root,
+            expected_target_family,
+            white_setting_mode,
+            custom_white_settings,
         )
     else:
         apply_special_separation_mode(
@@ -2540,6 +2624,8 @@ def convert_sources_cross(
     matrix_pallet_mode: str = MATRIX_PALLET_MODE_MAPPING,
     separation_mode: str = SEPARATION_MODE_STANDARD,
     custom_separations: dict[str, dict[str, str]] | None = None,
+    white_setting_mode: str = WHITE_SETTING_MODE_STANDARD,
+    custom_white_settings: dict[str, str] | None = None,
 ) -> list[ConvertedItem]:
     template_root = parse_ksf_bytes(template_bytes)
     template_tree = ET.ElementTree(template_root)
@@ -2564,6 +2650,8 @@ def convert_sources_cross(
                 matrix_pallet_mode=matrix_pallet_mode,
                 separation_mode=separation_mode,
                 custom_separations=custom_separations,
+                white_setting_mode=white_setting_mode,
+                custom_white_settings=custom_white_settings,
             )
             results.append(
                 ConvertedItem(
@@ -3382,6 +3470,8 @@ def render_conversion_workspace(
     selected_matrix_pallet_mode = MATRIX_PALLET_MODE_MAPPING
     selected_separation_mode = SEPARATION_MODE_STANDARD
     selected_custom_separations: dict[str, dict[str, str]] | None = None
+    selected_white_setting_mode = WHITE_SETTING_MODE_STANDARD
+    selected_custom_white_settings: dict[str, str] | None = None
     show_pallet_override = False
     show_matrix_pallet_mode = False
     expected_target_family_for_controls = "plus"
@@ -3522,6 +3612,69 @@ def render_conversion_workspace(
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
+    st.subheader("White settings")
+    selected_white_setting_mode = st.radio(
+        "White values",
+        options=WHITE_SETTING_MODE_OPTIONS,
+        index=0,
+        horizontal=True,
+        help=(
+            "Use app/template standard values keeps the approved white values for the selected output template. "
+            "Use source file values copies these values from the uploaded KSF. "
+            "Customize values lets you override these values for this conversion."
+        ),
+        key=f"{session_prefix}_white_setting_mode",
+    )
+    if selected_white_setting_mode == WHITE_SETTING_MODE_STANDARD:
+        st.caption("Output KSF files will use the approved white values for the selected output template.")
+    elif selected_white_setting_mode == WHITE_SETTING_MODE_SOURCE:
+        st.caption("Output KSF files will copy these white values from each source KSF.")
+    else:
+        white_defaults = {
+            "WBCMaxOpacity": "90" if expected_target_family_for_controls == "matrix" else ATLAS_PLUS_WHITE_DEFAULTS["WBCMaxOpacity"],
+            "WBCLUTMaxWhite": "90" if expected_target_family_for_controls == "matrix" else ATLAS_PLUS_WHITE_DEFAULTS["WBCLUTMaxWhite"],
+            "WBCWhiteness": "75" if expected_target_family_for_controls == "matrix" else ATLAS_PLUS_WHITE_DEFAULTS["WBCWhiteness"],
+        }
+        if template_bytes:
+            try:
+                template_root_for_white = parse_ksf_bytes(template_bytes)
+                for tag in WHITE_SETTING_TAGS:
+                    value = get_text(template_root_for_white, tag)
+                    if value:
+                        white_defaults[tag] = value
+            except ET.ParseError:
+                pass
+
+        col_max_opacity, col_lut_white, col_whiteness = st.columns(3)
+        with col_max_opacity:
+            wbc_max_opacity = st.number_input(
+                "Max opacity",
+                value=float(white_defaults["WBCMaxOpacity"]),
+                step=1.0,
+                key=f"{session_prefix}_white_wbc_max_opacity",
+            )
+        with col_lut_white:
+            wbclut_max_white = st.number_input(
+                "Max white",
+                value=float(white_defaults["WBCLUTMaxWhite"]),
+                step=1.0,
+                key=f"{session_prefix}_white_wbclut_max_white",
+            )
+        with col_whiteness:
+            wbc_whiteness = st.number_input(
+                "Whiteness",
+                value=float(white_defaults["WBCWhiteness"]),
+                step=1.0,
+                key=f"{session_prefix}_white_wbc_whiteness",
+            )
+        selected_custom_white_settings = {
+            "WBCMaxOpacity": format_number(float(wbc_max_opacity), str(wbc_max_opacity)),
+            "WBCLUTMaxWhite": format_number(float(wbclut_max_white), str(wbclut_max_white)),
+            "WBCWhiteness": format_number(float(wbc_whiteness), str(wbc_whiteness)),
+        }
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
     st.subheader("Spray adjustment")
     spray_delta = st.number_input(
         "SprayAmount delta",
@@ -3608,6 +3761,8 @@ def render_conversion_workspace(
                 convert_kwargs["matrix_pallet_mode"] = selected_matrix_pallet_mode
             convert_kwargs["separation_mode"] = selected_separation_mode
             convert_kwargs["custom_separations"] = selected_custom_separations
+            convert_kwargs["white_setting_mode"] = selected_white_setting_mode
+            convert_kwargs["custom_white_settings"] = selected_custom_white_settings
             converted_items = convert_sources_fn(**convert_kwargs)
             report = build_conversion_report(preview, converted_items)
             st.session_state[converted_items_key] = converted_items
