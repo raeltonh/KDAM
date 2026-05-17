@@ -323,8 +323,8 @@ AVALANCHE1000_PALLET_MAP = {
     "Standard pallet poly": "RSS - 15.9x19.9",
 }
 
-MATRIX_PALLET_MODE_MAPPING = "Use spreadsheet pallet"
-MATRIX_PALLET_MODE_RSS = "Convert known names to RSS"
+MATRIX_PALLET_MODE_MAPPING = "Use setup default pallet"
+MATRIX_PALLET_MODE_RSS = "Convert supported pallets to RSS"
 MATRIX_PALLET_MODE_TEMPLATE = "Keep Matrix template pallet"
 MATRIX_PALLET_MODE_OPTIONS = [
     MATRIX_PALLET_MODE_MAPPING,
@@ -3283,12 +3283,12 @@ def render_conversion_workspace(
         st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
         st.subheader("Matrix pallet mode")
         selected_matrix_pallet_mode = st.selectbox(
-            "Matrix pallet naming",
+            "Matrix output pallet",
             options=MATRIX_PALLET_MODE_OPTIONS,
             index=0,
             help=(
-                "Use spreadsheet pallet keeps the TableName from the Matrix mapping row. "
-                "Convert known names to RSS changes supported legacy names such as Standard pallet to RSS names. "
+                "Use setup default pallet keeps the pallet assigned to the selected Matrix setup. "
+                "Convert supported pallets to RSS changes supported legacy names such as Standard pallet to RSS names. "
                 "Keep Matrix template pallet restores the pallet from the selected Matrix template."
             ),
             key=f"{session_prefix}_matrix_pallet_mode",
@@ -3298,7 +3298,7 @@ def render_conversion_workspace(
         elif selected_matrix_pallet_mode == MATRIX_PALLET_MODE_TEMPLATE:
             st.caption("Output KSF files will keep the TableName from the Matrix template.")
         else:
-            st.caption("Output KSF files will use the pallet value from the Matrix mapping spreadsheet.")
+            st.caption("Output KSF files will use the default pallet assigned to the matched Matrix setup.")
         st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
