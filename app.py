@@ -197,6 +197,12 @@ SEPARATION_MODE_OPTIONS = [
 ]
 SPECIAL_SEPARATION_VALUE_TAGS = ("Enable", "Solid", "MaxCoverage", "IsMaxCoverage", "ChannelIndex")
 MATRIX_SPECIAL_SEPARATION_NAMES = ("DB", "Wsp", "Qwb", "Iwb", "Qw", "Iw", "Qc", "Ic")
+POLY_SPECIAL_SEPARATION_NAMES = ("Qw", "Qc", "PE")
+POLY_SPECIAL_SEPARATION_DEFAULTS = {
+    "Qw": {"solid": "0", "max_coverage": "75", "is_max_coverage": "true", "channel_index": "0"},
+    "Qc": {"solid": "0", "max_coverage": "62", "is_max_coverage": "true", "channel_index": "0"},
+    "PE": {"solid": "0", "max_coverage": "40", "is_max_coverage": "true", "channel_index": "0"},
+}
 
 WHITE_SETTING_MODE_STANDARD = "Use app/template standard values"
 WHITE_SETTING_MODE_SOURCE = "Use source file values"
@@ -206,7 +212,7 @@ WHITE_SETTING_MODE_OPTIONS = [
     WHITE_SETTING_MODE_SOURCE,
     WHITE_SETTING_MODE_CUSTOM,
 ]
-WHITE_SETTING_TAGS = ("WBCMaxOpacity", "WBCLUTMaxWhite", "WBCWhiteness")
+WHITE_SETTING_TAGS = ("WhiteTransparency", "WBCLUTMaxWhite", "WBCWhiteness")
 
 ATLAS_PLUS_WHITE_DEFAULTS = {
     "WhiteTransparency": "25",
@@ -307,6 +313,26 @@ CROSS_MAPPING_WORKBOOK_NAMES = (
     "plus_poly_to_matrix_mapping_template.xlsx",
 )
 
+ICC_OPTIONS_WORKBOOK_NAME = "icc_options_template.xlsx"
+PALLET_MAPPING_WORKBOOK_NAME = "pallet_mapping_template.xlsx"
+
+PALLET_OUTPUT_DEFAULT = "Default recommended"
+PALLET_OUTPUT_RSS = "RSS pallets"
+PALLET_OUTPUT_LEGACY = "Legacy Atlas pallets"
+PALLET_OUTPUT_FORMAT_OPTIONS = [
+    PALLET_OUTPUT_DEFAULT,
+    PALLET_OUTPUT_RSS,
+    PALLET_OUTPUT_LEGACY,
+]
+POLY_STANDARD_PALLET_DEFAULT = "Default recommended"
+POLY_STANDARD_PALLET_POLY = "Poly standard (Atlas - Standard poly)"
+POLY_STANDARD_PALLET_ATLAS = "Atlas standard (Atlas - Standard)"
+POLY_STANDARD_PALLET_OPTIONS = [
+    POLY_STANDARD_PALLET_DEFAULT,
+    POLY_STANDARD_PALLET_POLY,
+    POLY_STANDARD_PALLET_ATLAS,
+]
+
 PALLET_OVERRIDE_DEFAULT = "Use mapping value"
 POLY_PALLET_OPTIONS = [
     PALLET_OVERRIDE_DEFAULT,
@@ -392,6 +418,18 @@ class MappingRow:
     target_pallet: str
     status: str
     auto_map_key: str
+    notes: str
+
+
+@dataclass(frozen=True)
+class PalletMappingRow:
+    status: str
+    client: str
+    source_machine: str
+    source_pallet: str
+    target_machine: str
+    target_pallet: str
+    pallet_kind: str
     notes: str
 
 
@@ -1175,6 +1213,86 @@ def load_mapping_rows() -> tuple[str | None, list[MappingRow]]:
     return ", ".join(workbook_names), rows
 
 
+def normalize_header(text: str) -> str:
+    return normalize_lookup(text).replace(" ", "_")
+
+
+@lru_cache(maxsize=1)
+def load_icc_option_rows() -> dict[str, list[str]]:
+    workbook_path = MAPPING_WORKBOOK_DIR / ICC_OPTIONS_WORKBOOK_NAME
+    if not workbook_path.is_file():
+        return {}
+
+    load_workbook_fn = load_workbook_loader()
+    if load_workbook_fn is None:
+        return {}
+
+    workbook = load_workbook_fn(workbook_path, data_only=True)
+    options: dict[str, list[str]] = {}
+    for sheet in workbook.worksheets:
+        headers = [normalize_header(str(cell.value or "")) for cell in sheet[1]]
+        for row in sheet.iter_rows(min_row=2, values_only=True):
+            for index, header in enumerate(headers):
+                if not header or index >= len(row):
+                    continue
+                value = str(row[index] or "").strip()
+                if value:
+                    options.setdefault(header, []).append(value)
+    return options
+
+
+@lru_cache(maxsize=1)
+def load_pallet_mapping_rows() -> list[PalletMappingRow]:
+    workbook_path = MAPPING_WORKBOOK_DIR / PALLET_MAPPING_WORKBOOK_NAME
+    if not workbook_path.is_file():
+        return []
+
+    load_workbook_fn = load_workbook_loader()
+    if load_workbook_fn is None:
+        return []
+
+    workbook = load_workbook_fn(workbook_path, data_only=True)
+    sheet = workbook["PALLET_MAPPING"] if "PALLET_MAPPING" in workbook.sheetnames else workbook[workbook.sheetnames[0]]
+    headers: dict[str, int] = {}
+    for index, cell in enumerate(sheet[1]):
+        header = normalize_header(str(cell.value or ""))
+        if header:
+            headers[header] = index
+
+    def row_value(row: tuple[Any, ...], *header_names: str) -> str:
+        for header_name in header_names:
+            index = headers.get(normalize_header(header_name))
+            if index is not None and index < len(row):
+                value = str(row[index] or "").strip()
+                if value:
+                    return value
+        return ""
+
+    rows: list[PalletMappingRow] = []
+    for raw_row in sheet.iter_rows(min_row=2, values_only=True):
+        source_machine = row_value(raw_row, "SOURCE_MACHINE")
+        source_pallet = row_value(raw_row, "SOURCE_PALLET")
+        target_machine = row_value(raw_row, "TARGET_MACHINE")
+        target_pallet = row_value(raw_row, "TARGET_PALLET")
+        if not any([source_machine, source_pallet, target_machine, target_pallet]):
+            continue
+
+        rows.append(
+            PalletMappingRow(
+                status=row_value(raw_row, "STATUS"),
+                client=row_value(raw_row, "CLIENT"),
+                source_machine=source_machine,
+                source_pallet=source_pallet,
+                target_machine=target_machine,
+                target_pallet=target_pallet,
+                pallet_kind=row_value(raw_row, "KIND OF PALLET", "PALLET_KIND", "TYPE"),
+                notes=row_value(raw_row, "NOTES"),
+            )
+        )
+
+    return rows
+
+
 def find_mapping_row(
     source_root: ET.Element,
     template_root: ET.Element | None = None,
@@ -1595,6 +1713,25 @@ def get_cross_direction_families(direction: str) -> tuple[str, str]:
     return "poly", "plus"
 
 
+def machine_label_for_family(family: str | None) -> str:
+    labels = {
+        "plus": "Atlas Max Plus",
+        "atlas": "Atlas Max Plus",
+        "max": "Atlas Max Plus",
+        "poly": "Poly",
+        "avalanche1000": "Avalanche 1000",
+        "avhd6": "AVHD6",
+        "vulcan": "Vulcan",
+        "matrix": "Matrix",
+    }
+    return labels.get(family or "", family or "")
+
+
+def get_cross_direction_machines(direction: str) -> tuple[str, str]:
+    source_family, target_family = get_cross_direction_families(direction)
+    return machine_label_for_family(source_family), machine_label_for_family(target_family)
+
+
 def validate_cross_direction(
     source_root: ET.Element,
     template_root: ET.Element | None,
@@ -2002,7 +2139,7 @@ def apply_white_setting_mode(
         return
     if target_family == "plus":
         apply_atlas_plus_white_defaults(target_root)
-    elif target_family == "matrix":
+    elif target_family in {"matrix", "poly"}:
         copy_white_settings(template_root, target_root)
 
 
@@ -2011,6 +2148,128 @@ def apply_avalanche1000_pallet_mapping(source_root: ET.Element, target_root: ET.
     target_pallet = AVALANCHE1000_PALLET_MAP.get(source_pallet)
     if target_pallet:
         replace_simple_text(target_root, "TableName", target_pallet)
+
+
+def selected_pallet_kind(pallet_output_format: str) -> str:
+    if pallet_output_format == PALLET_OUTPUT_RSS:
+        return "rss"
+    if pallet_output_format == PALLET_OUTPUT_LEGACY:
+        return "legacy"
+    return ""
+
+
+def find_pallet_mapping_row(
+    source_machine: str,
+    source_pallet: str,
+    target_machine: str,
+    pallet_output_format: str,
+) -> PalletMappingRow | None:
+    pallet_kind = selected_pallet_kind(pallet_output_format)
+    candidates = [
+        row
+        for row in load_pallet_mapping_rows()
+        if normalize_lookup(row.source_machine) == normalize_lookup(source_machine)
+        and normalize_lookup(row.source_pallet) == normalize_lookup(source_pallet)
+        and normalize_lookup(row.target_machine) == normalize_lookup(target_machine)
+        and row.target_pallet
+        and (
+            normalize_lookup(row.pallet_kind) == normalize_lookup(pallet_kind)
+            if pallet_kind
+            else normalize_lookup(row.status) == "active"
+        )
+    ]
+    if not candidates:
+        return None
+
+    def status_priority(row: PalletMappingRow) -> int:
+        status = normalize_lookup(row.status)
+        if status == "active":
+            return 30
+        if status == "review":
+            return 20
+        if status == "draft":
+            return 10
+        return 0
+
+    return sorted(candidates, key=status_priority, reverse=True)[0]
+
+
+def find_exact_target_pallet_mapping_row(
+    source_machine: str,
+    source_pallet: str,
+    target_machine: str,
+    target_pallet: str,
+) -> PalletMappingRow | None:
+    candidates = [
+        row
+        for row in load_pallet_mapping_rows()
+        if normalize_lookup(row.source_machine) == normalize_lookup(source_machine)
+        and normalize_lookup(row.source_pallet) == normalize_lookup(source_pallet)
+        and normalize_lookup(row.target_machine) == normalize_lookup(target_machine)
+        and normalize_lookup(row.target_pallet) == normalize_lookup(target_pallet)
+    ]
+    if not candidates:
+        return None
+
+    def status_priority(row: PalletMappingRow) -> int:
+        status = normalize_lookup(row.status)
+        if status == "active":
+            return 30
+        if status == "review":
+            return 20
+        if status == "draft":
+            return 10
+        return 0
+
+    return sorted(candidates, key=status_priority, reverse=True)[0]
+
+
+def apply_pallet_output_format(
+    source_root: ET.Element,
+    target_root: ET.Element,
+    *,
+    source_machine: str,
+    target_machine: str,
+    pallet_output_format: str,
+) -> None:
+    mapping_row = find_pallet_mapping_row(
+        source_machine=source_machine,
+        source_pallet=get_text(source_root, "TableName"),
+        target_machine=target_machine,
+        pallet_output_format=pallet_output_format,
+    )
+    if mapping_row is not None:
+        replace_simple_text(target_root, "TableName", mapping_row.target_pallet)
+
+
+def selected_poly_standard_target_pallet(poly_standard_pallet: str) -> str:
+    if poly_standard_pallet == POLY_STANDARD_PALLET_POLY:
+        return "Atlas - Standard poly"
+    if poly_standard_pallet == POLY_STANDARD_PALLET_ATLAS:
+        return "Atlas - Standard"
+    return ""
+
+
+def apply_poly_standard_pallet_choice(
+    source_root: ET.Element,
+    target_root: ET.Element,
+    *,
+    source_machine: str,
+    target_machine: str,
+    poly_standard_pallet: str,
+) -> None:
+    target_pallet = selected_poly_standard_target_pallet(poly_standard_pallet)
+    if not target_pallet:
+        return
+
+    mapping_row = find_exact_target_pallet_mapping_row(
+        source_machine=source_machine,
+        source_pallet=get_text(source_root, "TableName"),
+        target_machine=target_machine,
+        target_pallet=target_pallet,
+    )
+    if mapping_row is not None:
+        replace_simple_text(target_root, "TableName", mapping_row.target_pallet)
 
 
 def apply_matrix_pallet_mode(
@@ -2101,6 +2360,66 @@ def apply_spray_amount_delta(root: ET.Element, spray_delta: float) -> None:
         apply_delta_to_tag(root, "SprayAmount", spray_delta)
 
 
+def batch_override_key(
+    route: str,
+    source_setup: str,
+    source_media: str,
+    source_output_icc: str,
+    source_input_rgb: str,
+) -> str:
+    return "\x1f".join(
+        [
+            normalize_lookup(route),
+            normalize_lookup(source_media),
+            normalize_lookup(source_output_icc),
+            normalize_lookup(source_input_rgb),
+        ]
+    )
+
+
+def batch_override_key_from_source(source_root: ET.Element, route: str) -> str:
+    return batch_override_key(
+        route=route,
+        source_setup=get_text(source_root, "LastBaseSetupName") or get_text(source_root, "SetApplied"),
+        source_media=get_text(source_root, "MediaName"),
+        source_output_icc=get_text(source_root, "IccOutFileName"),
+        source_input_rgb=get_text(source_root, "IccInRGBFileName"),
+    )
+
+
+def apply_batch_mapping_override(
+    target_root: ET.Element,
+    override: dict[str, str] | None,
+    *,
+    update_base_setup: bool = True,
+) -> None:
+    if not override:
+        return
+
+    target_setup = str(override.get("target_setup") or "").strip()
+    target_base_setup = str(override.get("target_base_setup") or "").strip()
+    target_media = str(override.get("target_media") or "").strip()
+    target_output_icc = str(override.get("target_output_icc") or "").strip()
+    target_input_rgb = str(override.get("target_input_rgb") or "").strip()
+    target_input_cmyk = str(override.get("target_input_cmyk") or "").strip()
+    target_pallet = str(override.get("target_pallet") or "").strip()
+
+    if target_setup:
+        replace_simple_text(target_root, "SetApplied", target_setup)
+    if update_base_setup and (target_base_setup or target_setup):
+        replace_simple_text(target_root, "LastBaseSetupName", target_base_setup or target_setup)
+    if target_media:
+        replace_simple_text(target_root, "MediaName", target_media)
+    if target_output_icc:
+        replace_simple_text(target_root, "IccOutFileName", target_output_icc)
+    if target_input_rgb:
+        replace_simple_text(target_root, "IccInRGBFileName", target_input_rgb)
+    if target_input_cmyk:
+        replace_simple_text(target_root, "IccInCMYKFileName", target_input_cmyk)
+    if target_pallet:
+        replace_simple_text(target_root, "TableName", target_pallet)
+
+
 def build_converted_root(
     source_root: ET.Element,
     template_tree: ET.ElementTree,
@@ -2115,6 +2434,9 @@ def build_converted_root(
     custom_separations: dict[str, dict[str, str]] | None = None,
     white_setting_mode: str = WHITE_SETTING_MODE_STANDARD,
     custom_white_settings: dict[str, str] | None = None,
+    batch_mapping_overrides: dict[str, dict[str, str]] | None = None,
+    pallet_output_format: str = PALLET_OUTPUT_DEFAULT,
+    poly_standard_pallet: str = POLY_STANDARD_PALLET_DEFAULT,
 ) -> ET.Element:
     target_root = cast(ET.Element, copy.deepcopy(template_tree.getroot()))
     template_root = cast(ET.Element, template_tree.getroot())
@@ -2159,6 +2481,17 @@ def build_converted_root(
         "plus",
         white_setting_mode,
         custom_white_settings,
+    )
+    apply_batch_mapping_override(
+        target_root,
+        (batch_mapping_overrides or {}).get(batch_override_key_from_source(source_root, "Vulcan -> Plus")),
+    )
+    apply_pallet_output_format(
+        source_root,
+        target_root,
+        source_machine="Vulcan",
+        target_machine="Atlas Max Plus",
+        pallet_output_format=pallet_output_format,
     )
 
     apply_spray_amount_delta(target_root, spray_delta)
@@ -2243,14 +2576,22 @@ def build_preview(files: list[SourceItem], template_name: str, template_bytes: b
                         f"Source does not look like Vulcan; {mixed_route_label(mixed_direction)} was selected."
                     )
                 source_info["mapped_atlas_setup"] = mapping_row.target_base_setup or mapping_row.target_setup
+                source_info["mapped_atlas_base_setup"] = mapping_row.target_base_setup or mapping_row.target_setup
                 source_info["mapped_atlas_media"] = mapping_row.target_media
                 source_info["mapped_atlas_output_icc"] = mapping_row.target_output_icc
+                source_info["mapped_atlas_input_rgb"] = mapping_row.target_input_rgb
+                source_info["mapped_atlas_input_cmyk"] = mapping_row.target_input_cmyk
+                source_info["mapped_atlas_pallet"] = mapping_row.target_pallet
             else:
                 source_info["mapping_status"] = "review"
                 source_info["mapping_source"] = mixed_route_label(mixed_direction) if mixed_direction else "no spreadsheet match"
                 source_info["mapped_atlas_setup"] = ""
+                source_info["mapped_atlas_base_setup"] = ""
                 source_info["mapped_atlas_media"] = ""
                 source_info["mapped_atlas_output_icc"] = ""
+                source_info["mapped_atlas_input_rgb"] = ""
+                source_info["mapped_atlas_input_cmyk"] = ""
+                source_info["mapped_atlas_pallet"] = ""
                 if mixed_direction is not None:
                     source_info["warnings"].append(
                         f"Source does not look like Vulcan; {mixed_route_label(mixed_direction)} was selected but no reliable mapping was found."
@@ -2336,17 +2677,20 @@ def convert_sources(
     custom_separations: dict[str, dict[str, str]] | None = None,
     white_setting_mode: str = WHITE_SETTING_MODE_STANDARD,
     custom_white_settings: dict[str, str] | None = None,
+    batch_mapping_overrides: dict[str, dict[str, str]] | None = None,
+    pallet_output_format: str = PALLET_OUTPUT_DEFAULT,
+    poly_standard_pallet: str = POLY_STANDARD_PALLET_DEFAULT,
 ) -> list[ConvertedItem]:
     template_root = parse_ksf_bytes(template_bytes)
     template_tree = ET.ElementTree(template_root)
     results: list[ConvertedItem] = []
 
     for source in source_parts:
-        output_path = Path("converted") / "needs-review" / source.relative_path.name
+        output_path = Path("converted") / "needs-review" / source.relative_path
         try:
             source_root = parse_ksf_bytes(source.data)
             mixed_direction = route_mixed_plus_direction(source_root)
-            output_path = Path("converted") / mixed_route_output_folder(mixed_direction) / source.relative_path.name
+            output_path = Path("converted") / mixed_route_output_folder(mixed_direction) / source.relative_path
             if mixed_direction is None:
                 converted_root = build_converted_root(
                     source_root=source_root,
@@ -2362,6 +2706,8 @@ def convert_sources(
                     custom_separations=custom_separations,
                     white_setting_mode=white_setting_mode,
                     custom_white_settings=custom_white_settings,
+                    batch_mapping_overrides=batch_mapping_overrides,
+                    pallet_output_format=pallet_output_format,
                 )
             else:
                 converted_root = build_converted_root_cross(
@@ -2379,7 +2725,15 @@ def convert_sources(
                     custom_separations=custom_separations,
                     white_setting_mode=white_setting_mode,
                     custom_white_settings=custom_white_settings,
+                    batch_mapping_overrides=batch_mapping_overrides,
+                    pallet_output_format=pallet_output_format,
                 )
+            apply_batch_mapping_override(
+                converted_root,
+                (batch_mapping_overrides or {}).get(
+                    batch_override_key_from_source(source_root, mixed_route_label(mixed_direction))
+                ),
+            )
             ensure_converted_output_is_mapped(converted_root, mixed_route_label(mixed_direction))
             results.append(
                 ConvertedItem(
@@ -2421,6 +2775,9 @@ def build_converted_root_cross(
     custom_separations: dict[str, dict[str, str]] | None = None,
     white_setting_mode: str = WHITE_SETTING_MODE_STANDARD,
     custom_white_settings: dict[str, str] | None = None,
+    batch_mapping_overrides: dict[str, dict[str, str]] | None = None,
+    pallet_output_format: str = PALLET_OUTPUT_DEFAULT,
+    poly_standard_pallet: str = POLY_STANDARD_PALLET_DEFAULT,
 ) -> ET.Element:
     target_root = cast(ET.Element, copy.deepcopy(template_tree.getroot()))
     template_root = cast(ET.Element, template_tree.getroot())
@@ -2498,6 +2855,22 @@ def build_converted_root_cross(
             white_setting_mode,
             custom_white_settings,
         )
+    elif expected_target_family == "poly":
+        apply_special_separation_mode(
+            source_root,
+            target_root,
+            expected_target_family,
+            separation_mode,
+            custom_separations,
+        )
+        apply_white_setting_mode(
+            source_root,
+            target_root,
+            template_root,
+            expected_target_family,
+            white_setting_mode,
+            custom_white_settings,
+        )
     else:
         apply_special_separation_mode(
             source_root,
@@ -2505,6 +2878,28 @@ def build_converted_root_cross(
             expected_target_family,
             separation_mode,
             custom_separations,
+        )
+
+    apply_batch_mapping_override(
+        target_root,
+        (batch_mapping_overrides or {}).get(batch_override_key_from_source(source_root, direction)),
+        update_base_setup=expected_target_family != "poly",
+    )
+    source_machine, target_machine = get_cross_direction_machines(direction)
+    apply_pallet_output_format(
+        source_root,
+        target_root,
+        source_machine=source_machine,
+        target_machine=target_machine,
+        pallet_output_format=pallet_output_format,
+    )
+    if direction == "plus_to_poly":
+        apply_poly_standard_pallet_choice(
+            source_root,
+            target_root,
+            source_machine=source_machine,
+            target_machine=target_machine,
+            poly_standard_pallet=poly_standard_pallet,
         )
 
     if set_name_mode == "source-file":
@@ -2562,10 +2957,13 @@ def build_preview_cross(
             if mapping_row is not None:
                 source_info["mapping_status"] = mapping_row.status or "mapped"
                 source_info["mapping_source"] = f"{mapping_row.workbook_name} / {mapping_row.sheet_name}"
-                source_info["mapped_atlas_setup"] = mapping_row.target_base_setup or mapping_row.target_setup
+                source_info["mapped_atlas_setup"] = mapping_row.target_setup or mapping_row.target_base_setup
+                source_info["mapped_atlas_base_setup"] = mapping_row.target_base_setup or mapping_row.target_setup
                 source_info["mapped_atlas_media"] = mapping_row.target_media
                 source_info["mapped_atlas_output_icc"] = mapping_row.target_output_icc
                 source_info["mapped_atlas_input_rgb"] = mapping_row.target_input_rgb
+                source_info["mapped_atlas_input_cmyk"] = mapping_row.target_input_cmyk
+                source_info["mapped_atlas_pallet"] = mapping_row.target_pallet
                 if direction == "avalanche1000_to_plus" and avalanche1000_mapping_uses_fallback(root, mapping_row):
                     source_info["warnings"].append(
                         "Source setup did not match a spreadsheet setup exactly; mapped by media/output profile fallback."
@@ -2574,9 +2972,12 @@ def build_preview_cross(
                 source_info["mapping_status"] = "review"
                 source_info["mapping_source"] = mapping_workbook_name or "no spreadsheet match"
                 source_info["mapped_atlas_setup"] = ""
+                source_info["mapped_atlas_base_setup"] = ""
                 source_info["mapped_atlas_media"] = ""
                 source_info["mapped_atlas_output_icc"] = ""
                 source_info["mapped_atlas_input_rgb"] = ""
+                source_info["mapped_atlas_input_cmyk"] = ""
+                source_info["mapped_atlas_pallet"] = ""
 
             items.append(
                 {
@@ -2606,6 +3007,7 @@ def build_preview_cross(
         "template_filename": template_name,
         "template": template_info,
         "mapping_workbook": mapping_workbook_name,
+        "direction": direction,
         "items": items,
     }
 
@@ -2626,13 +3028,16 @@ def convert_sources_cross(
     custom_separations: dict[str, dict[str, str]] | None = None,
     white_setting_mode: str = WHITE_SETTING_MODE_STANDARD,
     custom_white_settings: dict[str, str] | None = None,
+    batch_mapping_overrides: dict[str, dict[str, str]] | None = None,
+    pallet_output_format: str = PALLET_OUTPUT_DEFAULT,
+    poly_standard_pallet: str = POLY_STANDARD_PALLET_DEFAULT,
 ) -> list[ConvertedItem]:
     template_root = parse_ksf_bytes(template_bytes)
     template_tree = ET.ElementTree(template_root)
     results: list[ConvertedItem] = []
 
     for source in source_parts:
-        output_path = Path("converted") / source.relative_path.name
+        output_path = Path("converted") / source.relative_path
         try:
             source_root = parse_ksf_bytes(source.data)
             converted_root = build_converted_root_cross(
@@ -2652,6 +3057,9 @@ def convert_sources_cross(
                 custom_separations=custom_separations,
                 white_setting_mode=white_setting_mode,
                 custom_white_settings=custom_white_settings,
+                batch_mapping_overrides=batch_mapping_overrides,
+                pallet_output_format=pallet_output_format,
+                poly_standard_pallet=poly_standard_pallet,
             )
             results.append(
                 ConvertedItem(
@@ -2693,9 +3101,14 @@ def build_conversion_report(preview: dict, converted_items: list[ConvertedItem])
                 "source_media": source.get("media_name"),
                 "source_setup": source.get("last_base_setup_name") or source.get("set_applied"),
                 "source_output_icc": source.get("icc_out"),
+                "source_input_rgb": source.get("icc_in_rgb"),
                 "mapped_target_setup": source.get("mapped_atlas_setup"),
+                "mapped_target_base_setup": source.get("mapped_atlas_base_setup"),
                 "mapped_target_media": source.get("mapped_atlas_media"),
                 "mapped_target_output_icc": source.get("mapped_atlas_output_icc"),
+                "mapped_target_input_rgb": source.get("mapped_atlas_input_rgb"),
+                "mapped_target_input_cmyk": source.get("mapped_atlas_input_cmyk"),
+                "mapped_target_pallet": source.get("mapped_atlas_pallet"),
                 "warnings": preview_item.get("warnings", []),
                 "analysis_error": preview_item.get("error"),
                 "conversion_status": converted_item.status if converted_item else "not-run",
@@ -2798,6 +3211,327 @@ def render_kpis(source_parts: list[SourceItem], template_name: str | None, previ
             st.metric("Warnings", warnings_count + invalid_count)
 
 
+def editable_rows_to_records(rows: Any) -> list[dict[str, Any]]:
+    if hasattr(rows, "to_dict"):
+        return cast(list[dict[str, Any]], rows.to_dict("records"))
+    return cast(list[dict[str, Any]], rows or [])
+
+
+def build_batch_mapping_table(preview: dict) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    default_route = preview.get("direction") or "Vulcan -> Plus"
+    target_family = target_family_for_preview(preview)
+
+    for item in preview.get("items", []):
+        if item.get("status") == "error" or not item.get("source"):
+            continue
+        source = item["source"]
+        route = source.get("conversion_route") or default_route
+        source_setup = source.get("last_base_setup_name") or source.get("set_applied") or ""
+        source_media = source.get("media_name") or ""
+        source_output_icc = source.get("icc_out") or ""
+        source_input_rgb = source.get("icc_in_rgb") or ""
+        key = batch_override_key(route, source_setup, source_media, source_output_icc, source_input_rgb)
+
+        if key not in grouped:
+            default_setup = source.get("mapped_atlas_setup") or ""
+            default_base_setup = source.get("mapped_atlas_base_setup") or default_setup
+            default_media = source.get("mapped_atlas_media") or ""
+            default_output_icc = source.get("mapped_atlas_output_icc") or ""
+            default_input_rgb = source.get("mapped_atlas_input_rgb") or ""
+            default_input_cmyk = source.get("mapped_atlas_input_cmyk") or ""
+            if target_family == "plus":
+                default_input_rgb = default_input_rgb or "None"
+                default_input_cmyk = default_input_cmyk or "None"
+            default_pallet = source.get("mapped_atlas_pallet") or ""
+            grouped[key] = {
+                "Override key": key,
+                "Files": 0,
+                "Route": route,
+                "Source media": source_media,
+                "Source output ICC": source_output_icc,
+                "Source input RGB": source_input_rgb,
+                "Source setups": 0,
+                "Default setup": default_setup,
+                "Default base setup": default_base_setup,
+                "Default media": default_media,
+                "Default output ICC": default_output_icc,
+                "Default input RGB": default_input_rgb,
+                "Default input CMYK": default_input_cmyk,
+                "Default pallet": default_pallet,
+                "Use custom": False,
+                "Custom setup": default_setup,
+                "Custom base setup": default_base_setup,
+                "Custom media": default_media,
+                "Custom output ICC": default_output_icc,
+                "Custom input RGB": default_input_rgb,
+                "Custom input CMYK": default_input_cmyk,
+                "Custom pallet": default_pallet,
+            }
+        grouped[key]["Files"] += 1
+        grouped[key].setdefault("_source_setup_values", set())
+        grouped[key]["_source_setup_values"].add(source_setup)
+
+    rows = []
+    for row in grouped.values():
+        source_setup_values = row.pop("_source_setup_values", set())
+        row["Source setups"] = len({value for value in source_setup_values if value})
+        rows.append(row)
+
+    return sorted(
+        rows,
+        key=lambda row: (
+            str(row["Route"]),
+            str(row["Source media"]),
+            str(row["Source output ICC"]),
+            str(row["Default setup"]),
+        ),
+    )
+
+
+def target_family_for_preview(preview: dict) -> str:
+    direction = str(preview.get("direction") or "")
+    if direction:
+        _, target_family = get_cross_direction_families(direction)
+        return target_family
+    return "plus"
+
+
+def unique_nonempty(values: list[str]) -> list[str]:
+    return sorted({value.strip() for value in values if value and value.strip()}, key=normalize_lookup)
+
+
+def batch_target_options(preview: dict, table_rows: list[dict[str, Any]]) -> dict[str, list[str]]:
+    target_family = target_family_for_preview(preview)
+    _, mapping_rows = load_mapping_rows()
+    icc_options = load_icc_option_rows()
+    compatible_rows = [
+        row
+        for row in mapping_rows
+        if families_are_compatible(target_family, row.target_family)
+    ]
+
+    def with_current_values(option_values: list[str], column_name: str) -> list[str]:
+        current_values = [str(row.get(column_name) or "") for row in table_rows]
+        values = unique_nonempty(option_values + current_values)
+        return ["", *values]
+
+    def with_input_values(option_values: list[str], column_name: str) -> list[str]:
+        values = with_current_values(option_values, column_name)
+        if "None" not in values:
+            values.insert(1, "None")
+        return values
+
+    setup_values = [
+        row.target_setup or row.target_base_setup
+        for row in compatible_rows
+    ]
+    base_setup_values = [
+        row.target_base_setup or row.target_setup
+        for row in compatible_rows
+    ]
+    media_values = [row.target_media for row in compatible_rows]
+    output_values = [row.target_output_icc for row in compatible_rows]
+    input_rgb_values = [row.target_input_rgb for row in compatible_rows]
+    input_cmyk_values = [row.target_input_cmyk for row in compatible_rows]
+    pallet_values = [row.target_pallet for row in compatible_rows]
+
+    global_output_values: list[str] = []
+    global_input_rgb_values: list[str] = []
+    global_input_cmyk_values: list[str] = []
+    global_input_values: list[str] = []
+    for header, values in icc_options.items():
+        if "output_icc" in header:
+            global_output_values.extend(values)
+        if "input" in header:
+            global_input_values.extend(values)
+        if "input_rgb" in header:
+            global_input_rgb_values.extend(values)
+        if "input_cmyk" in header:
+            global_input_cmyk_values.extend(values)
+
+    output_values.extend(global_output_values)
+    input_rgb_values.extend(global_input_rgb_values or global_input_values)
+    input_cmyk_values.extend(global_input_cmyk_values or global_input_values)
+
+    return {
+        "setup": with_current_values(setup_values, "Custom setup"),
+        "base_setup": with_current_values(base_setup_values, "Custom base setup"),
+        "media": with_current_values(media_values, "Custom media"),
+        "output_icc": with_current_values(output_values, "Custom output ICC"),
+        "input_rgb": with_input_values(input_rgb_values, "Custom input RGB"),
+        "input_cmyk": with_input_values(input_cmyk_values, "Custom input CMYK"),
+        "pallet": with_current_values(pallet_values, "Custom pallet"),
+    }
+
+
+def build_batch_mapping_overrides(rows: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+    overrides: dict[str, dict[str, str]] = {}
+    for row in rows:
+        key = str(row.get("Override key") or "")
+        if not key:
+            continue
+        if not bool(row.get("Use custom")):
+            continue
+
+        override = {
+            "target_setup": str(row.get("Custom setup") or "").strip(),
+            "target_base_setup": str(row.get("Custom base setup") or "").strip(),
+            "target_media": str(row.get("Custom media") or "").strip(),
+            "target_output_icc": str(row.get("Custom output ICC") or "").strip(),
+            "target_input_rgb": str(row.get("Custom input RGB") or "").strip(),
+            "target_input_cmyk": str(row.get("Custom input CMYK") or "").strip(),
+            "target_pallet": str(row.get("Custom pallet") or "").strip(),
+        }
+        if any(override.values()):
+            overrides[key] = override
+    return overrides
+
+
+def render_batch_mapping_editor(preview: dict, session_prefix: str) -> tuple[dict[str, dict[str, str]], str, str]:
+    table_rows = build_batch_mapping_table(preview)
+    selected_pallet_output_format = PALLET_OUTPUT_DEFAULT
+    selected_poly_standard_pallet = POLY_STANDARD_PALLET_DEFAULT
+    if not table_rows:
+        st.caption("No editable mapping groups were found in the current analysis.")
+        return {}, selected_pallet_output_format, selected_poly_standard_pallet
+    options = batch_target_options(preview, table_rows)
+    has_input_rgb_options = len([value for value in options["input_rgb"] if value]) > 1
+    has_input_cmyk_options = len([value for value in options["input_cmyk"] if value]) > 1
+    target_family = target_family_for_preview(preview)
+
+    st.subheader("Batch output mapping")
+    st.caption(
+        "Each row is a group found in the uploaded KSF batch. Leave `Use custom` unchecked to use the default mapping. "
+        "Check `Use custom` only for rows where this batch needs a different target output."
+    )
+    if target_family in {"plus", "poly"}:
+        selected_pallet_output_format = st.radio(
+            "Pallet output format",
+            options=PALLET_OUTPUT_FORMAT_OPTIONS,
+            index=0,
+            horizontal=True,
+            help=(
+                "Choose how pallet names should be written when more than one valid output exists. "
+                "Default recommended keeps the approved conversion behavior."
+            ),
+            key=f"{session_prefix}_batch_pallet_output_format",
+        )
+        if selected_pallet_output_format == PALLET_OUTPUT_RSS:
+            st.caption("When an RSS option exists for the source pallet, output KSF files will prefer RSS pallet names.")
+        elif selected_pallet_output_format == PALLET_OUTPUT_LEGACY:
+            st.caption("When a legacy Atlas option exists for the source pallet, output KSF files will prefer legacy Atlas pallet names.")
+        else:
+            st.caption("Output KSF files will use the default recommended pallet names.")
+
+    if str(preview.get("direction") or "") == "plus_to_poly":
+        selected_poly_standard_pallet = st.radio(
+            "Standard pallet output for Poly",
+            options=POLY_STANDARD_PALLET_OPTIONS,
+            index=0,
+            horizontal=True,
+            help=(
+                "Choose the Poly output name for standard-size pallets only. "
+                "This does not force one pallet across the full batch."
+            ),
+            key=f"{session_prefix}_poly_standard_pallet",
+        )
+        if selected_poly_standard_pallet == POLY_STANDARD_PALLET_POLY:
+            st.caption("Standard Plus pallets will output as `Atlas - Standard poly` when that mapping exists.")
+        elif selected_poly_standard_pallet == POLY_STANDARD_PALLET_ATLAS:
+            st.caption("Standard Plus pallets will output as `Atlas - Standard` when that mapping exists.")
+        else:
+            st.caption("Standard Plus pallets will use the default recommended Poly pallet name.")
+
+    st.markdown(
+        """
+        <div class="custom-output-guide">
+            <strong>Custom output columns</strong>
+            <span>Pastel green marks the editable output area. Turn on <code>Custom?</code> only for rows that need a one-off output change.</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    editor_data: Any = table_rows
+    try:
+        import pandas as pd
+
+        editor_frame = pd.DataFrame(table_rows)
+        custom_columns = [
+            column
+            for column in editor_frame.columns
+            if column == "Use custom" or column.startswith("Custom ")
+        ]
+
+        def highlight_custom_columns(_: Any) -> Any:
+            styles = pd.DataFrame("", index=editor_frame.index, columns=editor_frame.columns)
+            styles.loc[:, custom_columns] = "background-color: #eef9f0;"
+            return styles
+
+        editor_data = editor_frame.style.apply(highlight_custom_columns, axis=None)
+    except Exception:
+        editor_data = table_rows
+
+    edited_rows = st.data_editor(
+        editor_data,
+        key=f"{session_prefix}_batch_mapping_editor_v3",
+        hide_index=True,
+        use_container_width=True,
+        disabled=[
+            "Override key",
+            "Files",
+            "Route",
+            "Source media",
+            "Source output ICC",
+            "Source input RGB",
+            "Source setups",
+            "Default setup",
+            "Default media",
+            "Default output ICC",
+            "Default input RGB",
+            "Default input CMYK",
+            "Default pallet",
+            "Default base setup",
+        ],
+        column_config={
+            "Override key": None,
+            "Files": st.column_config.NumberColumn("Files", width="small"),
+            "Route": None,
+            "Source media": st.column_config.TextColumn("Source media", width=220),
+            "Source output ICC": st.column_config.TextColumn("Source output ICC", width=230),
+            "Source input RGB": st.column_config.TextColumn("Source input RGB", width=210),
+            "Source setups": st.column_config.NumberColumn("Source setups", width="small"),
+            "Default setup": st.column_config.TextColumn("Default setup", width=230),
+            "Default media": st.column_config.TextColumn("Default media", width=230),
+            "Default output ICC": st.column_config.TextColumn("Default output ICC", width=230),
+            "Default input RGB": None,
+            "Default input CMYK": None,
+            "Default pallet": None,
+            "Default base setup": None,
+            "Use custom": st.column_config.CheckboxColumn("Custom?", width="small"),
+            "Custom setup": st.column_config.SelectboxColumn("Custom setup", options=options["setup"], width=250),
+            "Custom base setup": st.column_config.SelectboxColumn("Custom base setup", options=options["base_setup"], width=260),
+            "Custom media": st.column_config.SelectboxColumn("Custom media", options=options["media"], width=250),
+            "Custom output ICC": st.column_config.SelectboxColumn("Custom output ICC", options=options["output_icc"], width=230),
+            "Custom input RGB": (
+                st.column_config.SelectboxColumn("Custom input RGB", options=options["input_rgb"], width=210)
+                if has_input_rgb_options
+                else None
+            ),
+            "Custom input CMYK": (
+                st.column_config.SelectboxColumn("Custom input CMYK", options=options["input_cmyk"], width=210)
+                if has_input_cmyk_options
+                else None
+            ),
+            "Custom pallet": None,
+        },
+    )
+    records = editable_rows_to_records(edited_rows)
+    override_count = sum(1 for row in records if bool(row.get("Use custom")))
+    st.caption(f"Unique mapping groups: `{len(records)}` | Custom rows changed: `{override_count}`")
+    return build_batch_mapping_overrides(records), selected_pallet_output_format, selected_poly_standard_pallet
+
+
 def render_preview_legacy(preview: dict) -> None:
     priority_warnings = [
         (item["filename"], warning)
@@ -2870,6 +3604,7 @@ def render_preview_legacy(preview: dict) -> None:
                         f"Mapped Atlas setup: `{item['source'].get('mapped_atlas_setup') or 'N/A'}`  \n"
                         f"Mapped Atlas media: `{item['source'].get('mapped_atlas_media') or 'N/A'}`  \n"
                         f"Mapped Atlas output ICC: `{item['source'].get('mapped_atlas_output_icc') or 'N/A'}`  \n"
+                        f"Mapped Atlas pallet: `{item['source'].get('mapped_atlas_pallet') or 'N/A'}`  \n"
                         "Matching priority: Vulcan setup/base setup first, exact Media + Output ICC second, Output ICC alone as fallback, media as support, and input profile as a light support signal. The spreadsheet is not treated as a strict horizontal all-fields-must-match rule. Special separations in the output are forced to: Qw = 45 max coverage, Iw = 25 solid, Qc = 25 max coverage, Ic = 0 solid. White defaults are forced to Max White = 95, Whiteness = 85, Choke = 2 pixels, and Graded Edges = 2 pixels."
                     )
                 with top_b:
@@ -2958,6 +3693,7 @@ def render_preview_cross(preview: dict) -> None:
                         f"Mapped target media: `{item['source'].get('mapped_atlas_media') or 'N/A'}`  \n"
                         f"Mapped target output ICC: `{item['source'].get('mapped_atlas_output_icc') or 'N/A'}`  \n"
                         f"Mapped target input RGB: `{item['source'].get('mapped_atlas_input_rgb') or 'N/A'}`  \n"
+                        f"Mapped target pallet: `{item['source'].get('mapped_atlas_pallet') or 'N/A'}`  \n"
                         "Cross-conversion mapping follows the workbook entries. Matching priority is: Base Setup first, Media second, Output ICC third, and Input RGB as a support signal. When one reliable match identifies the row, the app applies the full mapped target package from that spreadsheet row."
                     )
                 with top_b:
@@ -3466,36 +4202,18 @@ def render_conversion_workspace(
 
     render_kpis(source_parts, template_name, st.session_state.get(preview_key))
 
-    selected_pallet_override: str | None = None
     selected_matrix_pallet_mode = MATRIX_PALLET_MODE_MAPPING
+    selected_pallet_output_format = PALLET_OUTPUT_DEFAULT
+    selected_poly_standard_pallet = POLY_STANDARD_PALLET_DEFAULT
     selected_separation_mode = SEPARATION_MODE_STANDARD
     selected_custom_separations: dict[str, dict[str, str]] | None = None
     selected_white_setting_mode = WHITE_SETTING_MODE_STANDARD
     selected_custom_white_settings: dict[str, str] | None = None
-    show_pallet_override = False
     show_matrix_pallet_mode = False
     expected_target_family_for_controls = "plus"
     if direction_value is not None:
         _, expected_target_family_for_controls = get_cross_direction_families(direction_value)
-        show_pallet_override = expected_target_family_for_controls == "poly"
         show_matrix_pallet_mode = expected_target_family_for_controls == "matrix"
-
-    if show_pallet_override:
-        st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
-        st.subheader("Pallet override")
-        selected_pallet = st.selectbox(
-            "Pallet name",
-            options=POLY_PALLET_OPTIONS,
-            index=0,
-            help="If selected, this value is written to <TableName> in every converted KSF. Leave as mapping value to use the spreadsheet.",
-            key=f"{session_prefix}_pallet_override",
-        )
-        if selected_pallet != PALLET_OVERRIDE_DEFAULT:
-            selected_pallet_override = selected_pallet
-            st.caption(f"Output KSF files will use TableName: `{selected_pallet_override}`")
-        else:
-            st.caption("Output KSF files will use the pallet from the mapping spreadsheet.")
-        st.markdown("</div>", unsafe_allow_html=True)
 
     if show_matrix_pallet_mode:
         st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
@@ -3538,11 +4256,6 @@ def render_conversion_workspace(
     elif selected_separation_mode == SEPARATION_MODE_SOURCE:
         st.caption("Output KSF files will copy matching channel separation values from each source KSF.")
     else:
-        target_separation_names = (
-            MATRIX_SPECIAL_SEPARATION_NAMES
-            if expected_target_family_for_controls == "matrix"
-            else tuple(SPECIAL_SEPARATION_RULES.keys())
-        )
         template_separation_defaults: dict[str, dict[str, str]] = {}
         if template_bytes:
             try:
@@ -3555,9 +4268,24 @@ def render_conversion_workspace(
             except ET.ParseError:
                 template_separation_defaults = {}
 
+        if expected_target_family_for_controls == "matrix":
+            target_separation_names = MATRIX_SPECIAL_SEPARATION_NAMES
+        elif expected_target_family_for_controls == "poly":
+            template_poly_names = tuple(
+                name
+                for name in POLY_SPECIAL_SEPARATION_NAMES
+                if name in template_separation_defaults
+            )
+            target_separation_names = template_poly_names or POLY_SPECIAL_SEPARATION_NAMES
+        else:
+            target_separation_names = tuple(SPECIAL_SEPARATION_RULES.keys())
+
         custom_values: dict[str, dict[str, str]] = {}
         for name in target_separation_names:
-            default_config = SPECIAL_SEPARATION_RULES.get(name, {})
+            default_config = POLY_SPECIAL_SEPARATION_DEFAULTS.get(
+                name,
+                SPECIAL_SEPARATION_RULES.get(name, {}),
+            )
             template_defaults = template_separation_defaults.get(name, {})
             is_max_default = (
                 template_defaults.get("IsMaxCoverage")
@@ -3631,7 +4359,7 @@ def render_conversion_workspace(
         st.caption("Output KSF files will copy these white values from each source KSF.")
     else:
         white_defaults = {
-            "WBCMaxOpacity": "90" if expected_target_family_for_controls == "matrix" else ATLAS_PLUS_WHITE_DEFAULTS["WBCMaxOpacity"],
+            "WhiteTransparency": "50" if expected_target_family_for_controls in {"matrix", "poly"} else ATLAS_PLUS_WHITE_DEFAULTS["WhiteTransparency"],
             "WBCLUTMaxWhite": "90" if expected_target_family_for_controls == "matrix" else ATLAS_PLUS_WHITE_DEFAULTS["WBCLUTMaxWhite"],
             "WBCWhiteness": "75" if expected_target_family_for_controls == "matrix" else ATLAS_PLUS_WHITE_DEFAULTS["WBCWhiteness"],
         }
@@ -3645,13 +4373,13 @@ def render_conversion_workspace(
             except ET.ParseError:
                 pass
 
-        col_max_opacity, col_lut_white, col_whiteness = st.columns(3)
-        with col_max_opacity:
-            wbc_max_opacity = st.number_input(
-                "Max opacity",
-                value=float(white_defaults["WBCMaxOpacity"]),
+        col_transparency, col_lut_white, col_whiteness = st.columns(3)
+        with col_transparency:
+            white_transparency = st.number_input(
+                "Transparency",
+                value=float(white_defaults["WhiteTransparency"]),
                 step=1.0,
-                key=f"{session_prefix}_white_wbc_max_opacity",
+                key=f"{session_prefix}_white_transparency",
             )
         with col_lut_white:
             wbclut_max_white = st.number_input(
@@ -3668,7 +4396,7 @@ def render_conversion_workspace(
                 key=f"{session_prefix}_white_wbc_whiteness",
             )
         selected_custom_white_settings = {
-            "WBCMaxOpacity": format_number(float(wbc_max_opacity), str(wbc_max_opacity)),
+            "WhiteTransparency": format_number(float(white_transparency), str(white_transparency)),
             "WBCLUTMaxWhite": format_number(float(wbclut_max_white), str(wbclut_max_white)),
             "WBCWhiteness": format_number(float(wbc_whiteness), str(wbc_whiteness)),
         }
@@ -3706,10 +4434,12 @@ def render_conversion_workspace(
     st.caption("Output is always generated as a single ZIP package with the converted KSF files and `conversion-report.json`.")
     st.markdown("</div>", unsafe_allow_html=True)
 
-    action_a, action_b = st.columns([1.2, 0.8])
+    action_a, action_b, action_c = st.columns([1, 1.2, 0.8])
     with action_a:
-        convert_clicked = st.button("Convert and export ZIP", type="primary", use_container_width=True, key=f"{session_prefix}_convert")
+        analyze_clicked = st.button("Analyze batch mappings", use_container_width=True, key=f"{session_prefix}_analyze")
     with action_b:
+        convert_clicked = st.button("Convert and export ZIP", type="primary", use_container_width=True, key=f"{session_prefix}_convert")
+    with action_c:
         st.button(
             "Clear",
             use_container_width=True,
@@ -3723,9 +4453,39 @@ def render_conversion_workspace(
     for issue in source_collection_issues:
         st.error(issue)
 
+    if analyze_clicked:
+        if not source_parts or not template_bytes:
+            if not source_parts and source_error:
+                st.error(source_error)
+            else:
+                st.error(analyze_error)
+        else:
+            resolved_template_name = template_name or "atlas-template.ksf"
+            if direction_value is None:
+                preview = build_preview_fn(source_parts, resolved_template_name, template_bytes)
+            else:
+                preview = build_preview_fn(
+                    source_parts,
+                    resolved_template_name,
+                    template_bytes,
+                    direction_value,
+                )
+            st.session_state[preview_key] = preview
+            st.session_state.pop(converted_items_key, None)
+            st.session_state.pop(conversion_report_key, None)
+            st.session_state.pop(zip_bytes_key, None)
+            st.session_state.pop(saved_output_key, None)
+
     preview = st.session_state.get(preview_key)
+    batch_mapping_overrides: dict[str, dict[str, str]] = {}
     if preview:
-        render_preview_fn(preview)
+        st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
+        (
+            batch_mapping_overrides,
+            selected_pallet_output_format,
+            selected_poly_standard_pallet,
+        ) = render_batch_mapping_editor(preview, session_prefix)
+        st.markdown("</div>", unsafe_allow_html=True)
 
     if convert_clicked:
         if not source_parts or not template_bytes:
@@ -3757,12 +4517,14 @@ def render_conversion_workspace(
             )
             if direction_value is not None:
                 convert_kwargs["direction"] = direction_value
-                convert_kwargs["pallet_override"] = selected_pallet_override
                 convert_kwargs["matrix_pallet_mode"] = selected_matrix_pallet_mode
+            convert_kwargs["pallet_output_format"] = selected_pallet_output_format
+            convert_kwargs["poly_standard_pallet"] = selected_poly_standard_pallet
             convert_kwargs["separation_mode"] = selected_separation_mode
             convert_kwargs["custom_separations"] = selected_custom_separations
             convert_kwargs["white_setting_mode"] = selected_white_setting_mode
             convert_kwargs["custom_white_settings"] = selected_custom_white_settings
+            convert_kwargs["batch_mapping_overrides"] = batch_mapping_overrides
             converted_items = convert_sources_fn(**convert_kwargs)
             report = build_conversion_report(preview, converted_items)
             st.session_state[converted_items_key] = converted_items
@@ -4496,6 +5258,29 @@ def main() -> None:
             background: #eef2f7 !important;
             color: #1f2937 !important;
             border-radius: 6px !important;
+        }
+        .custom-output-guide {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+            background: #eef9f0;
+            border: 1px solid #b9dfc0;
+            border-left: 4px solid #4f9f63;
+            border-radius: 8px;
+            color: #1f3f2a;
+            padding: 0.65rem 0.8rem;
+            margin: 0.4rem 0 0.65rem 0;
+        }
+        .custom-output-guide strong {
+            color: #163d24;
+        }
+        .custom-output-guide span {
+            color: #31533b;
+        }
+        .custom-output-guide code {
+            background: rgba(79, 159, 99, 0.14) !important;
+            color: #163d24 !important;
         }
         </style>
         """,
