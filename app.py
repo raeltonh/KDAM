@@ -2345,6 +2345,10 @@ def apply_delta_to_tag(parent: ET.Element, tag: str, delta: float) -> None:
     node.text = format_number(value + delta, original)
 
 
+def apply_absolute_to_tag(parent: ET.Element, tag: str, value: float) -> None:
+    replace_simple_text(parent, tag, format_number(value, str(value)))
+
+
 def apply_offset_delta(root: ET.Element, x_delta: float, y_delta: float) -> None:
     if x_delta:
         apply_delta_to_tag(root, "XOffsetMM", x_delta)
@@ -2354,6 +2358,14 @@ def apply_offset_delta(root: ET.Element, x_delta: float, y_delta: float) -> None
         apply_delta_to_tag(root, "YOffsetMM", y_delta)
         for strip in root.findall("./Strips/StripParam"):
             apply_delta_to_tag(strip, "YOffsetMM", y_delta)
+
+
+def apply_y_offset_absolute(root: ET.Element, y_value: float | None) -> None:
+    if y_value is None:
+        return
+    apply_absolute_to_tag(root, "YOffsetMM", y_value)
+    for strip in root.findall("./Strips/StripParam"):
+        apply_absolute_to_tag(strip, "YOffsetMM", y_value)
 
 
 def apply_spray_amount_delta(root: ET.Element, spray_delta: float) -> None:
@@ -2422,6 +2434,14 @@ def apply_batch_mapping_override(
         replace_simple_text(target_root, "TableName", target_pallet)
 
 
+def apply_batch_spray_override(target_root: ET.Element, override: dict[str, str] | None) -> None:
+    if not override:
+        return
+    target_spray_amount = str(override.get("target_spray_amount") or "").strip()
+    if target_spray_amount:
+        replace_simple_text(target_root, "SprayAmount", target_spray_amount)
+
+
 def build_converted_root(
     source_root: ET.Element,
     template_tree: ET.ElementTree,
@@ -2431,6 +2451,7 @@ def build_converted_root(
     output_stem: str,
     x_delta: float,
     y_delta: float,
+    y_offset_absolute: float | None,
     spray_delta: float,
     separation_mode: str = SEPARATION_MODE_STANDARD,
     custom_separations: dict[str, dict[str, str]] | None = None,
@@ -2484,10 +2505,10 @@ def build_converted_root(
         white_setting_mode,
         custom_white_settings,
     )
-    apply_batch_mapping_override(
-        target_root,
-        (batch_mapping_overrides or {}).get(batch_override_key_from_source(source_root, "Vulcan -> Plus")),
+    batch_override = (batch_mapping_overrides or {}).get(
+        batch_override_key_from_source(source_root, "Vulcan -> Plus")
     )
+    apply_batch_mapping_override(target_root, batch_override)
     apply_pallet_output_format(
         source_root,
         target_root,
@@ -2497,7 +2518,9 @@ def build_converted_root(
     )
 
     apply_spray_amount_delta(target_root, spray_delta)
+    apply_batch_spray_override(target_root, batch_override)
     apply_offset_delta(target_root, x_delta, y_delta)
+    apply_y_offset_absolute(target_root, y_offset_absolute)
     sync_strip_geometry_from_root(target_root)
     return target_root
 
@@ -2517,6 +2540,7 @@ def convert_one(
     set_name_mode: str,
     x_delta: float,
     y_delta: float,
+    y_offset_absolute: float | None = None,
     spray_delta: float = 0.0,
 ) -> None:
     source_tree = load_xml(source_path)
@@ -2530,6 +2554,7 @@ def convert_one(
         output_stem=output_path.stem,
         x_delta=x_delta,
         y_delta=y_delta,
+        y_offset_absolute=y_offset_absolute,
         spray_delta=spray_delta,
         separation_mode=SEPARATION_MODE_STANDARD,
         custom_separations=None,
@@ -2674,6 +2699,7 @@ def convert_sources(
     set_name_mode: str,
     x_delta: float,
     y_delta: float,
+    y_offset_absolute: float | None,
     spray_delta: float,
     separation_mode: str = SEPARATION_MODE_STANDARD,
     custom_separations: dict[str, dict[str, str]] | None = None,
@@ -2703,6 +2729,7 @@ def convert_sources(
                     output_stem=output_path.stem,
                     x_delta=x_delta,
                     y_delta=y_delta,
+                    y_offset_absolute=y_offset_absolute,
                     spray_delta=spray_delta,
                     separation_mode=separation_mode,
                     custom_separations=custom_separations,
@@ -2722,6 +2749,7 @@ def convert_sources(
                     output_stem=output_path.stem,
                     x_delta=x_delta,
                     y_delta=y_delta,
+                    y_offset_absolute=y_offset_absolute,
                     spray_delta=spray_delta,
                     separation_mode=separation_mode,
                     custom_separations=custom_separations,
@@ -2730,12 +2758,11 @@ def convert_sources(
                     batch_mapping_overrides=batch_mapping_overrides,
                     pallet_output_format=pallet_output_format,
                 )
-            apply_batch_mapping_override(
-                converted_root,
-                (batch_mapping_overrides or {}).get(
-                    batch_override_key_from_source(source_root, mixed_route_label(mixed_direction))
-                ),
+            batch_override = (batch_mapping_overrides or {}).get(
+                batch_override_key_from_source(source_root, mixed_route_label(mixed_direction))
             )
+            apply_batch_mapping_override(converted_root, batch_override)
+            apply_batch_spray_override(converted_root, batch_override)
             ensure_converted_output_is_mapped(converted_root, mixed_route_label(mixed_direction))
             results.append(
                 ConvertedItem(
@@ -2770,6 +2797,7 @@ def build_converted_root_cross(
     output_stem: str,
     x_delta: float,
     y_delta: float,
+    y_offset_absolute: float | None,
     spray_delta: float,
     pallet_override: str | None = None,
     matrix_pallet_mode: str = MATRIX_PALLET_MODE_MAPPING,
@@ -2880,9 +2908,12 @@ def build_converted_root_cross(
             custom_separations,
         )
 
+    batch_override = (batch_mapping_overrides or {}).get(
+        batch_override_key_from_source(source_root, direction)
+    )
     apply_batch_mapping_override(
         target_root,
-        (batch_mapping_overrides or {}).get(batch_override_key_from_source(source_root, direction)),
+        batch_override,
         update_base_setup=expected_target_family != "poly",
     )
     source_machine, target_machine = get_cross_direction_machines(direction)
@@ -2909,7 +2940,9 @@ def build_converted_root_cross(
         replace_simple_text(target_root, "TableName", pallet_override)
 
     apply_spray_amount_delta(target_root, spray_delta)
+    apply_batch_spray_override(target_root, batch_override)
     apply_offset_delta(target_root, x_delta, y_delta)
+    apply_y_offset_absolute(target_root, y_offset_absolute)
     sync_strip_geometry_from_root(target_root)
     return target_root
 
@@ -3021,6 +3054,7 @@ def convert_sources_cross(
     set_name_mode: str,
     x_delta: float,
     y_delta: float,
+    y_offset_absolute: float | None,
     spray_delta: float,
     pallet_override: str | None = None,
     matrix_pallet_mode: str = MATRIX_PALLET_MODE_MAPPING,
@@ -3050,6 +3084,7 @@ def convert_sources_cross(
                 output_stem=output_path.stem,
                 x_delta=x_delta,
                 y_delta=y_delta,
+                y_offset_absolute=y_offset_absolute,
                 spray_delta=spray_delta,
                 pallet_override=pallet_override,
                 matrix_pallet_mode=matrix_pallet_mode,
@@ -3246,6 +3281,34 @@ def editable_rows_to_records(rows: Any) -> list[dict[str, Any]]:
     return cast(list[dict[str, Any]], rows or [])
 
 
+def clean_editor_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and value != value:
+        return ""
+    if isinstance(value, float):
+        return format_number(value, str(value))
+    if isinstance(value, int):
+        return str(value)
+    return str(value).strip()
+
+
+def suggested_spray_amount_for_target(
+    target_setup: str,
+    target_base_setup: str,
+    target_media: str,
+) -> str:
+    setup_text = normalize_lookup(" ".join([target_setup, target_base_setup]))
+    media_text = normalize_lookup(target_media)
+    target_text = f"{setup_text} {media_text}"
+
+    if "light" in setup_text:
+        return "15"
+    if any(token in target_text for token in ["dark", "black", "color"]):
+        return "65"
+    return ""
+
+
 def build_batch_mapping_table(preview: dict) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
     default_route = preview.get("direction") or "Vulcan -> Plus"
@@ -3273,6 +3336,12 @@ def build_batch_mapping_table(preview: dict) -> list[dict[str, Any]]:
                 default_input_rgb = default_input_rgb or "None"
                 default_input_cmyk = default_input_cmyk or "None"
             default_pallet = source.get("mapped_atlas_pallet") or ""
+            default_spray_amount = suggested_spray_amount_for_target(
+                default_setup,
+                default_base_setup,
+                default_media,
+            )
+            custom_spray_amount = float(default_spray_amount) if default_spray_amount else None
             grouped[key] = {
                 "Override key": key,
                 "Files": 0,
@@ -3289,6 +3358,7 @@ def build_batch_mapping_table(preview: dict) -> list[dict[str, Any]]:
                 "Default input RGB": default_input_rgb,
                 "Default input CMYK": default_input_cmyk,
                 "Default pallet": default_pallet,
+                "Default spray": default_spray_amount,
                 "Use custom": False,
                 "Custom setup": default_setup,
                 "Custom base setup": default_base_setup,
@@ -3297,6 +3367,7 @@ def build_batch_mapping_table(preview: dict) -> list[dict[str, Any]]:
                 "Custom input RGB": default_input_rgb,
                 "Custom input CMYK": default_input_cmyk,
                 "Custom pallet": default_pallet,
+                "Custom spray": custom_spray_amount,
             }
         grouped[key]["Files"] += 1
         grouped[key].setdefault("_source_setup_values", set())
@@ -3402,17 +3473,23 @@ def build_batch_mapping_overrides(rows: list[dict[str, Any]]) -> dict[str, dict[
         key = str(row.get("Override key") or "")
         if not key:
             continue
+
         if not bool(row.get("Use custom")):
+            default_spray_amount = clean_editor_text(row.get("Default spray"))
+            if default_spray_amount:
+                overrides[key] = {"target_spray_amount": default_spray_amount}
             continue
 
         override = {
-            "target_setup": str(row.get("Custom setup") or "").strip(),
-            "target_base_setup": str(row.get("Custom base setup") or "").strip(),
-            "target_media": str(row.get("Custom media") or "").strip(),
-            "target_output_icc": str(row.get("Custom output ICC") or "").strip(),
-            "target_input_rgb": str(row.get("Custom input RGB") or "").strip(),
-            "target_input_cmyk": str(row.get("Custom input CMYK") or "").strip(),
-            "target_pallet": str(row.get("Custom pallet") or "").strip(),
+            "target_setup": clean_editor_text(row.get("Custom setup")),
+            "target_base_setup": clean_editor_text(row.get("Custom base setup")),
+            "target_media": clean_editor_text(row.get("Custom media")),
+            "target_output_icc": clean_editor_text(row.get("Custom output ICC")),
+            "target_input_rgb": clean_editor_text(row.get("Custom input RGB")),
+            "target_input_cmyk": clean_editor_text(row.get("Custom input CMYK")),
+            "target_pallet": clean_editor_text(row.get("Custom pallet")),
+            "target_spray_amount": clean_editor_text(row.get("Custom spray"))
+            or clean_editor_text(row.get("Default spray")),
         }
         if any(override.values()):
             overrides[key] = override
@@ -3433,8 +3510,8 @@ def render_batch_mapping_editor(preview: dict, session_prefix: str) -> tuple[dic
 
     st.subheader("Batch output mapping")
     st.caption(
-        "Each row is a group found in the uploaded KSF batch. Leave `Use custom` unchecked to use the default mapping. "
-        "Check `Use custom` only for rows where this batch needs a different target output."
+        "Each row is a group found in the uploaded KSF batch. The `Default spray` value is applied automatically. "
+        "Check `Use custom` only for rows where this batch needs a different target output or a different spray value."
     )
     if target_family in {"plus", "poly"}:
         selected_pallet_output_format = st.radio(
@@ -3478,7 +3555,7 @@ def render_batch_mapping_editor(preview: dict, session_prefix: str) -> tuple[dic
         """
         <div class="custom-output-guide">
             <strong>Custom output columns</strong>
-            <span>Pastel green marks the editable output area. Turn on <code>Custom?</code> only for rows that need a one-off output change.</span>
+            <span>Pastel green marks the editable output area. Default spray is automatic; turn on <code>Custom?</code> only for one-off output or spray changes.</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -3505,7 +3582,7 @@ def render_batch_mapping_editor(preview: dict, session_prefix: str) -> tuple[dic
 
     edited_rows = st.data_editor(
         editor_data,
-        key=f"{session_prefix}_batch_mapping_editor_v3",
+        key=f"{session_prefix}_batch_mapping_editor_v4",
         hide_index=True,
         use_container_width=True,
         disabled=[
@@ -3524,6 +3601,7 @@ def render_batch_mapping_editor(preview: dict, session_prefix: str) -> tuple[dic
             "Default input CMYK",
             "Default pallet",
             "Default base setup",
+            "Default spray",
         ],
         column_config={
             "Override key": None,
@@ -3541,6 +3619,7 @@ def render_batch_mapping_editor(preview: dict, session_prefix: str) -> tuple[dic
             "Default input CMYK": None,
             "Default pallet": None,
             "Default base setup": None,
+            "Default spray": st.column_config.TextColumn("Default spray", width="small"),
             "Use custom": st.column_config.CheckboxColumn("Custom?", width="small"),
             "Custom setup": st.column_config.SelectboxColumn("Custom setup", options=options["setup"], width=250),
             "Custom base setup": st.column_config.SelectboxColumn("Custom base setup", options=options["base_setup"], width=260),
@@ -3557,6 +3636,13 @@ def render_batch_mapping_editor(preview: dict, session_prefix: str) -> tuple[dic
                 else None
             ),
             "Custom pallet": st.column_config.SelectboxColumn("Custom pallet", options=options["pallet"], width=220),
+            "Custom spray": st.column_config.NumberColumn(
+                "Custom spray",
+                min_value=0.0,
+                step=1.0,
+                width="small",
+                help="Writes this value as the final SprayAmount when Custom? is enabled.",
+            ),
         },
     )
     records = editable_rows_to_records(edited_rows)
@@ -3923,6 +4009,7 @@ def render_conversion_workspace(
     set_name_mode = "template"
     x_delta = 0.0
     y_delta = 0.0
+    y_offset_absolute: float | None = None
 
     default_template_name, default_template_bytes = load_default_template_bytes()
     uploader_nonce_key = f"{session_prefix}_uploader_nonce"
@@ -4448,6 +4535,26 @@ def render_conversion_workspace(
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
+    st.subheader("Output offset")
+    use_y_offset_absolute = st.checkbox(
+        "Set final Y offset",
+        value=False,
+        help="When enabled, output KSF files keep the source X offset and write this value as the final YOffsetMM.",
+        key=f"{session_prefix}_use_y_offset_absolute",
+    )
+    if use_y_offset_absolute:
+        y_offset_absolute = st.number_input(
+            "Final YOffsetMM",
+            value=10.0,
+            step=1.0,
+            key=f"{session_prefix}_y_offset_absolute",
+        )
+        st.caption(f"Output YOffsetMM will be set to `{y_offset_absolute:g}`. XOffsetMM stays unchanged.")
+    else:
+        st.caption("Output offsets stay unchanged unless another conversion setting modifies them.")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
     st.subheader("Output folder")
     output_folder_key = f"{session_prefix}_output_folder"
     output_folder_text = st.text_input(
@@ -4546,6 +4653,7 @@ def render_conversion_workspace(
                 set_name_mode=set_name_mode,
                 x_delta=float(x_delta),
                 y_delta=float(y_delta),
+                y_offset_absolute=float(y_offset_absolute) if y_offset_absolute is not None else None,
                 spray_delta=float(spray_delta),
             )
             if direction_value is not None:
