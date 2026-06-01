@@ -384,6 +384,7 @@ MATRIX_RSS_PALLET_MAP = {
     "RSS 15.9x19.9": "RSS - 15.9x19.9",
     "Standard pallet": "RSS - 15.9x19.9",
     "Standard pallet poly": "RSS - 15.9x19.9",
+    "Super grand pallet": "RSS - 15.9x19.9",
     "Atlas - Youth and Ladies": "RSS - 11x15",
     "Atlas - Youth And Ladies Neck Tag": "RSS - 11x15",
     "Atlas - Children (L)": "RSS - 10.6x13.2",
@@ -525,13 +526,13 @@ MAPPING_SHEET_DEFINITIONS = (
         source_output_headers=("PLUS_OUTPUT_ICC", "SOURCE_OUTPUT_ICC", "OUTPUT_ICC"),
         source_input_rgb_headers=("PLUS_INPUT_RGB", "SOURCE_INPUT_RGB", "INPUT_RGB"),
         source_input_cmyk_headers=("PLUS_INPUT_CMYK", "SOURCE_INPUT_CMYK", "INPUT_CMYK"),
-        target_setup_headers=("MATRIX_SETUP", "MATRIX_BASE_SETUP", "TARGET_SETUP"),
-        target_base_setup_headers=("MATRIX_BASE_SETUP", "MATRIX_SETUP", "TARGET_BASE_SETUP"),
-        target_media_headers=("MATRIX_MEDIA", "TARGET_MEDIA"),
-        target_output_headers=("MATRIX_OUTPUT_ICC", "TARGET_OUTPUT_ICC"),
-        target_input_rgb_headers=("MATRIX_INPUT_RGB", "TARGET_INPUT_RGB"),
-        target_input_cmyk_headers=("MATRIX_INPUT_CMYK", "TARGET_INPUT_CMYK"),
-        target_pallet_headers=("MATRIX_PALLET", "POLY_PALLET", "TARGET_PALLET", "PALLET_MAPPING"),
+        target_setup_headers=("MATRIX_SETUP", "MATRIX_BASE_SETUP", "MATRIX SETUPS", "TARGET_SETUP"),
+        target_base_setup_headers=("MATRIX_BASE_SETUP", "MATRIX_SETUP", "MATRIX SETUPS", "TARGET_BASE_SETUP"),
+        target_media_headers=("MATRIX_MEDIA", "MediaName", "TARGET_MEDIA"),
+        target_output_headers=("MATRIX_OUTPUT_ICC", "IccOutFileName", "TARGET_OUTPUT_ICC"),
+        target_input_rgb_headers=("MATRIX_INPUT_RGB", "IccInRGBFileName", "TARGET_INPUT_RGB"),
+        target_input_cmyk_headers=("MATRIX_INPUT_CMYK", "IccInCMYKFileName", "TARGET_INPUT_CMYK"),
+        target_pallet_headers=("MATRIX_PALLET", "TableName", "POLY_PALLET", "TARGET_PALLET", "PALLET_MAPPING"),
         status_headers=("STATUS",),
         auto_map_key_headers=("AUTO_MAP_KEY",),
         notes_headers=("NOTES",),
@@ -2370,6 +2371,7 @@ def batch_override_key(
     return "\x1f".join(
         [
             normalize_lookup(route),
+            normalize_lookup(source_setup),
             normalize_lookup(source_media),
             normalize_lookup(source_output_icc),
             normalize_lookup(source_input_rgb),
@@ -2837,8 +2839,6 @@ def build_converted_root_cross(
         if direction == "avalanche1000_to_plus":
             apply_avalanche1000_pallet_mapping(source_root, target_root)
     elif expected_target_family == "matrix":
-        replace_simple_text(target_root, "IccInRGBFileName", "None")
-        replace_simple_text(target_root, "IccInCMYKFileName", "None")
         apply_matrix_pallet_mode(target_root, template_root, matrix_pallet_mode)
         apply_special_separation_mode(
             source_root,
@@ -3196,12 +3196,41 @@ def family_label(value: str) -> str:
     return labels.get(value, value.upper())
 
 
+def template_display_name(template_name: str | None) -> str:
+    if not template_name:
+        return "None"
+
+    short_names = {
+        "approved_atlas_max_template.ksf": "Atlas Max",
+        "default_atlas_template.ksf": "Atlas Max",
+        "atlas_max_plus_output_template.ksf": "Atlas Max",
+        "approved_plus_output_template.ksf": "Atlas Max",
+        "plus_output_template.ksf": "Atlas Max",
+        "approved_atlas_max_poly_template.ksf": "Poly",
+        "atlas_max_poly_output_template.ksf": "Poly",
+        "approved_poly_output_template.ksf": "Poly",
+        "poly_output_template.ksf": "Poly",
+        "approved_avhd6_output_template.ksf": "AVHD6",
+        "avhd6_output_template.ksf": "AVHD6",
+        "approved_matrix_template.ksf": "Matrix",
+        "approved_matrix_output_template.ksf": "Matrix",
+        "matrix_output_template.ksf": "Matrix",
+    }
+    if template_name in short_names:
+        return short_names[template_name]
+
+    label = Path(template_name).stem
+    label = label.removeprefix("approved_").removesuffix("_template")
+    label = label.replace("_", " ").replace("-", " ").title()
+    return label[:18].rstrip() or "Custom"
+
+
 def render_kpis(source_parts: list[SourceItem], template_name: str | None, preview: dict | None) -> None:
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Input", f"{len(source_parts)} file(s)")
     with col2:
-        st.metric("Template", template_name or "None")
+        st.metric("Template", template_display_name(template_name))
     with col3:
         if not preview:
             st.metric("Warnings", 0)
@@ -3248,6 +3277,7 @@ def build_batch_mapping_table(preview: dict) -> list[dict[str, Any]]:
                 "Override key": key,
                 "Files": 0,
                 "Route": route,
+                "Source setup": source_setup,
                 "Source media": source_media,
                 "Source output ICC": source_output_icc,
                 "Source input RGB": source_input_rgb,
@@ -3282,6 +3312,7 @@ def build_batch_mapping_table(preview: dict) -> list[dict[str, Any]]:
         rows,
         key=lambda row: (
             str(row["Route"]),
+            str(row["Source setup"]),
             str(row["Source media"]),
             str(row["Source output ICC"]),
             str(row["Default setup"]),
@@ -3481,6 +3512,7 @@ def render_batch_mapping_editor(preview: dict, session_prefix: str) -> tuple[dic
             "Override key",
             "Files",
             "Route",
+            "Source setup",
             "Source media",
             "Source output ICC",
             "Source input RGB",
@@ -3497,6 +3529,7 @@ def render_batch_mapping_editor(preview: dict, session_prefix: str) -> tuple[dic
             "Override key": None,
             "Files": st.column_config.NumberColumn("Files", width="small"),
             "Route": None,
+            "Source setup": st.column_config.TextColumn("Source setup", width=230),
             "Source media": st.column_config.TextColumn("Source media", width=220),
             "Source output ICC": st.column_config.TextColumn("Source output ICC", width=230),
             "Source input RGB": st.column_config.TextColumn("Source input RGB", width=210),
@@ -3523,7 +3556,7 @@ def render_batch_mapping_editor(preview: dict, session_prefix: str) -> tuple[dic
                 if has_input_cmyk_options
                 else None
             ),
-            "Custom pallet": None,
+            "Custom pallet": st.column_config.SelectboxColumn("Custom pallet", options=options["pallet"], width=220),
         },
     )
     records = editable_rows_to_records(edited_rows)
@@ -4577,7 +4610,7 @@ def render_conversion_workspace(
 
 def main() -> None:
     st.set_page_config(
-        page_title="Vulcan to Plus KSF Converter",
+        page_title="KSF Workflow Converter",
         page_icon="🧩",
         layout="wide",
     )
@@ -5127,6 +5160,20 @@ def main() -> None:
             border: 1px solid #d8dee7 !important;
             border-radius: 10px !important;
             box-shadow: 0 6px 16px rgba(15, 23, 42, 0.05) !important;
+            box-sizing: border-box !important;
+            min-width: 0 !important;
+            overflow: hidden !important;
+        }
+        div[data-testid="stMetricValue"],
+        div[data-testid="stMetricValue"] > div,
+        div[data-testid="stMetricValue"] * {
+            display: block !important;
+            max-width: 100% !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+            white-space: nowrap !important;
+            font-size: clamp(1.05rem, 1.55vw, 1.45rem) !important;
+            line-height: 1.15 !important;
         }
         div[data-testid="stFileUploader"],
         .cross-workspace div[data-testid="stFileUploader"],
@@ -5210,13 +5257,18 @@ def main() -> None:
             box-shadow: 0 8px 18px rgba(15, 23, 42, 0.10) !important;
         }
         div[data-baseweb="tab-list"] {
+            display: flex !important;
+            flex-wrap: wrap !important;
             gap: 0.4rem;
+            overflow: visible !important;
         }
         div[data-baseweb="tab-list"] button,
         div[data-baseweb="tab-list"] button:first-child,
         div[data-baseweb="tab-list"] button:nth-child(2),
         div[data-baseweb="tab-list"] button:nth-child(3),
         div[data-baseweb="tab-list"] button:nth-child(4) {
+            flex: 0 1 calc((100% - 1.6rem) / 5) !important;
+            min-width: 0 !important;
             min-height: 3.4rem;
             border-radius: 8px !important;
             background: #ffffff !important;
@@ -5251,6 +5303,15 @@ def main() -> None:
         div[data-baseweb="tab-list"] button:nth-child(4)[aria-selected="true"] * {
             color: #ffffff !important;
         }
+        @media (max-width: 900px) {
+            div[data-baseweb="tab-list"] button,
+            div[data-baseweb="tab-list"] button:first-child,
+            div[data-baseweb="tab-list"] button:nth-child(2),
+            div[data-baseweb="tab-list"] button:nth-child(3),
+            div[data-baseweb="tab-list"] button:nth-child(4) {
+                flex-basis: calc((100% - 0.4rem) / 2) !important;
+            }
+        }
         div[data-testid="stMarkdownContainer"] code,
         .cross-workspace div[data-testid="stMarkdownContainer"] code,
         .theme-cross-workspace div[data-testid="stMarkdownContainer"] code,
@@ -5282,6 +5343,226 @@ def main() -> None:
             background: rgba(79, 159, 99, 0.14) !important;
             color: #163d24 !important;
         }
+
+        /* Visual upgrade layer */
+        .stApp {
+            color: #172033 !important;
+            background:
+                linear-gradient(135deg, rgba(14, 165, 233, 0.14) 0%, rgba(255, 255, 255, 0) 34%),
+                linear-gradient(225deg, rgba(249, 115, 22, 0.12) 0%, rgba(255, 255, 255, 0) 30%),
+                linear-gradient(180deg, #f8fbff 0%, #eef5ff 46%, #f7fafc 100%) !important;
+        }
+        .block-container {
+            max-width: 1320px !important;
+            padding-top: 1.25rem !important;
+        }
+        .hero-card {
+            position: relative;
+            overflow: hidden;
+            background:
+                linear-gradient(135deg, #10233f 0%, #155e75 48%, #0f766e 100%) !important;
+            border: 1px solid rgba(255, 255, 255, 0.22) !important;
+            border-top: 0 !important;
+            border-radius: 16px !important;
+            padding: 1.55rem 1.75rem !important;
+            box-shadow: 0 22px 50px rgba(15, 35, 63, 0.22) !important;
+        }
+        .hero-card::after {
+            content: "";
+            position: absolute;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            height: 5px;
+            background: linear-gradient(90deg, #22d3ee 0%, #f97316 33%, #facc15 66%, #10b981 100%);
+        }
+        .hero-title {
+            color: #ffffff !important;
+            font-size: 2.25rem !important;
+            line-height: 1.08 !important;
+            letter-spacing: 0 !important;
+            text-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
+        }
+        .hero-subtitle {
+            color: rgba(236, 253, 245, 0.92) !important;
+            max-width: 980px;
+            font-size: 1.02rem !important;
+        }
+        .section-card,
+        .cross-section-card,
+        .theme-cross-card,
+        .theme-avhd6-card {
+            background: rgba(255, 255, 255, 0.88) !important;
+            border: 1px solid rgba(148, 163, 184, 0.35) !important;
+            border-radius: 14px !important;
+            box-shadow: 0 14px 34px rgba(15, 35, 63, 0.09) !important;
+            backdrop-filter: blur(12px) !important;
+        }
+        .cross-hero,
+        .theme-cross-hero,
+        .theme-avhd6-hero {
+            background:
+                linear-gradient(135deg, #172033 0%, #1d4ed8 46%, #0891b2 100%) !important;
+            border: 1px solid rgba(255, 255, 255, 0.18) !important;
+            border-radius: 14px !important;
+            box-shadow: 0 18px 38px rgba(30, 64, 175, 0.20) !important;
+        }
+        .theme-avhd6-hero {
+            background: linear-gradient(135deg, #3b1d78 0%, #be123c 46%, #f97316 100%) !important;
+        }
+        .cross-chip,
+        .theme-avhd6-hero .cross-chip,
+        .cross-hero-kicker,
+        .theme-avhd6-hero .cross-hero-kicker {
+            background: rgba(255, 255, 255, 0.14) !important;
+            border-color: rgba(255, 255, 255, 0.24) !important;
+            color: #ffffff !important;
+        }
+        div[data-baseweb="tab-list"] {
+            gap: 0.55rem !important;
+            padding: 0.15rem 0 0.35rem 0 !important;
+        }
+        div[data-baseweb="tab-list"] button,
+        div[data-baseweb="tab-list"] button:first-child,
+        div[data-baseweb="tab-list"] button:nth-child(2),
+        div[data-baseweb="tab-list"] button:nth-child(3),
+        div[data-baseweb="tab-list"] button:nth-child(4),
+        div[data-baseweb="tab-list"] button:nth-child(5),
+        div[data-baseweb="tab-list"] button:nth-child(6) {
+            flex: 0 1 calc((100% - 2.2rem) / 5) !important;
+            min-width: 0 !important;
+            min-height: 3.35rem !important;
+            border-radius: 12px !important;
+            font-weight: 800 !important;
+            letter-spacing: 0 !important;
+            color: #172033 !important;
+            background: rgba(255, 255, 255, 0.82) !important;
+            border: 1px solid rgba(148, 163, 184, 0.42) !important;
+            box-shadow: 0 10px 24px rgba(15, 35, 63, 0.08) !important;
+            transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease, background 140ms ease !important;
+        }
+        div[data-baseweb="tab-list"] button:first-child {
+            border-top: 4px solid #ef4444 !important;
+        }
+        div[data-baseweb="tab-list"] button:nth-child(2) {
+            border-top: 4px solid #06b6d4 !important;
+        }
+        div[data-baseweb="tab-list"] button:nth-child(3) {
+            border-top: 4px solid #f59e0b !important;
+        }
+        div[data-baseweb="tab-list"] button:nth-child(4) {
+            border-top: 4px solid #8b5cf6 !important;
+        }
+        div[data-baseweb="tab-list"] button:nth-child(5) {
+            border-top: 4px solid #10b981 !important;
+        }
+        div[data-baseweb="tab-list"] button:nth-child(6) {
+            border-top: 4px solid #f97316 !important;
+        }
+        div[data-baseweb="tab-list"] button:hover,
+        div[data-baseweb="tab-list"] button:first-child:hover,
+        div[data-baseweb="tab-list"] button:nth-child(2):hover,
+        div[data-baseweb="tab-list"] button:nth-child(3):hover,
+        div[data-baseweb="tab-list"] button:nth-child(4):hover,
+        div[data-baseweb="tab-list"] button:nth-child(5):hover,
+        div[data-baseweb="tab-list"] button:nth-child(6):hover {
+            transform: translateY(-2px) !important;
+            background: #ffffff !important;
+            border-color: rgba(15, 35, 63, 0.18) !important;
+            box-shadow: 0 16px 30px rgba(15, 35, 63, 0.13) !important;
+        }
+        div[data-baseweb="tab-list"] button[aria-selected="true"],
+        div[data-baseweb="tab-list"] button:first-child[aria-selected="true"],
+        div[data-baseweb="tab-list"] button:nth-child(2)[aria-selected="true"],
+        div[data-baseweb="tab-list"] button:nth-child(3)[aria-selected="true"],
+        div[data-baseweb="tab-list"] button:nth-child(4)[aria-selected="true"],
+        div[data-baseweb="tab-list"] button:nth-child(5)[aria-selected="true"],
+        div[data-baseweb="tab-list"] button:nth-child(6)[aria-selected="true"] {
+            color: #ffffff !important;
+            background: linear-gradient(135deg, #172033 0%, #1d4ed8 54%, #0891b2 100%) !important;
+            border-color: rgba(255, 255, 255, 0.16) !important;
+            box-shadow: 0 18px 36px rgba(29, 78, 216, 0.24) !important;
+        }
+        div[data-baseweb="tab-list"] button[aria-selected="true"] *,
+        div[data-baseweb="tab-list"] button:first-child[aria-selected="true"] *,
+        div[data-baseweb="tab-list"] button:nth-child(2)[aria-selected="true"] *,
+        div[data-baseweb="tab-list"] button:nth-child(3)[aria-selected="true"] *,
+        div[data-baseweb="tab-list"] button:nth-child(4)[aria-selected="true"] *,
+        div[data-baseweb="tab-list"] button:nth-child(5)[aria-selected="true"] *,
+        div[data-baseweb="tab-list"] button:nth-child(6)[aria-selected="true"] * {
+            color: #ffffff !important;
+        }
+        div[data-testid="stMetric"],
+        .cross-workspace div[data-testid="stMetric"],
+        .theme-cross-workspace div[data-testid="stMetric"],
+        .theme-avhd6-workspace div[data-testid="stMetric"] {
+            background:
+                linear-gradient(#ffffff, #ffffff) padding-box,
+                linear-gradient(135deg, rgba(34, 211, 238, 0.85), rgba(249, 115, 22, 0.78), rgba(16, 185, 129, 0.78)) border-box !important;
+            border: 1px solid transparent !important;
+            border-radius: 14px !important;
+            box-shadow: 0 14px 30px rgba(15, 35, 63, 0.10) !important;
+        }
+        div[data-testid="stMetricLabel"] *,
+        div[data-testid="stMetricLabel"] {
+            color: #475569 !important;
+            font-weight: 800 !important;
+        }
+        div[data-testid="stMetricValue"],
+        div[data-testid="stMetricValue"] > div,
+        div[data-testid="stMetricValue"] * {
+            color: #172033 !important;
+            font-weight: 800 !important;
+        }
+        div[data-testid="stFileUploader"],
+        .cross-workspace div[data-testid="stFileUploader"],
+        .theme-cross-workspace div[data-testid="stFileUploader"],
+        .theme-avhd6-workspace div[data-testid="stFileUploader"] {
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(240, 249, 255, 0.86)) !important;
+            border: 1px dashed rgba(14, 116, 144, 0.45) !important;
+            border-radius: 14px !important;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85), 0 10px 24px rgba(15, 35, 63, 0.06) !important;
+        }
+        div[data-testid="stButton"] > button,
+        .cross-workspace div[data-testid="stButton"] > button,
+        .theme-cross-workspace div[data-testid="stButton"] > button,
+        .theme-avhd6-workspace div[data-testid="stButton"] > button {
+            background: #ffffff !important;
+            border: 1px solid rgba(15, 35, 63, 0.20) !important;
+            border-radius: 11px !important;
+            color: #172033 !important;
+            font-weight: 800 !important;
+            box-shadow: 0 10px 22px rgba(15, 35, 63, 0.08) !important;
+        }
+        div[data-testid="stButton"] > button[kind="primary"],
+        .cross-workspace div[data-testid="stButton"] > button[kind="primary"],
+        .theme-cross-workspace div[data-testid="stButton"] > button[kind="primary"],
+        .theme-avhd6-workspace div[data-testid="stButton"] > button[kind="primary"] {
+            background: linear-gradient(135deg, #1d4ed8 0%, #0891b2 100%) !important;
+            border-color: rgba(29, 78, 216, 0.28) !important;
+            color: #ffffff !important;
+            box-shadow: 0 16px 30px rgba(29, 78, 216, 0.24) !important;
+        }
+        div[data-testid="stDownloadButton"] > button,
+        .cross-workspace div[data-testid="stDownloadButton"] > button,
+        .theme-cross-workspace div[data-testid="stDownloadButton"] > button,
+        .theme-avhd6-workspace div[data-testid="stDownloadButton"] > button {
+            background: linear-gradient(135deg, #059669 0%, #0f766e 100%) !important;
+            border-color: rgba(5, 150, 105, 0.32) !important;
+            border-radius: 11px !important;
+            box-shadow: 0 16px 30px rgba(5, 150, 105, 0.22) !important;
+        }
+        @media (max-width: 900px) {
+            div[data-baseweb="tab-list"] button,
+            div[data-baseweb="tab-list"] button:first-child,
+            div[data-baseweb="tab-list"] button:nth-child(2),
+            div[data-baseweb="tab-list"] button:nth-child(3),
+            div[data-baseweb="tab-list"] button:nth-child(4),
+            div[data-baseweb="tab-list"] button:nth-child(5),
+            div[data-baseweb="tab-list"] button:nth-child(6) {
+                flex-basis: calc((100% - 0.55rem) / 2) !important;
+            }
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -5290,11 +5571,10 @@ def main() -> None:
     st.markdown(
         """
         <div class="hero-card">
-            <div class="hero-title">Vulcan to Plus KSF Converter</div>
+            <div class="hero-title">KSF Workflow Converter</div>
             <div class="hero-subtitle">
-                Professional KSF conversion tool focused on Vulcan to Atlas Max+,
-                Atlas Max family to Poly, AVHD6 to Atlas Max+, Avalanche 1000 to Atlas Max+,
-                and Matrix conversion workflows.
+                Convert and standardize KSF/KST setups across Vulcan, Atlas Max+,
+                Poly, AVHD6, Avalanche 1000, and Matrix workflows.
             </div>
         </div>
         """,
