@@ -3309,6 +3309,20 @@ def suggested_spray_amount_for_target(
     return ""
 
 
+SPRAY_MODE_SOURCE = "Use source SprayAmount"
+SPRAY_MODE_SUGGESTED = "Use suggested value"
+SPRAY_MODE_CUSTOM = "Custom value"
+SPRAY_MODE_OPTIONS = [SPRAY_MODE_SUGGESTED, SPRAY_MODE_SOURCE, SPRAY_MODE_CUSTOM]
+
+
+def applied_spray_label(mode: str, suggested_spray: str, custom_spray: str) -> str:
+    if mode == SPRAY_MODE_SOURCE:
+        return "Source SprayAmount"
+    if mode == SPRAY_MODE_CUSTOM:
+        return custom_spray or ""
+    return suggested_spray or ""
+
+
 def build_batch_mapping_table(preview: dict) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
     default_route = preview.get("direction") or "Vulcan -> Plus"
@@ -3341,7 +3355,6 @@ def build_batch_mapping_table(preview: dict) -> list[dict[str, Any]]:
                 default_base_setup,
                 default_media,
             )
-            custom_spray_amount = float(default_spray_amount) if default_spray_amount else None
             grouped[key] = {
                 "Override key": key,
                 "Files": 0,
@@ -3367,7 +3380,6 @@ def build_batch_mapping_table(preview: dict) -> list[dict[str, Any]]:
                 "Custom input RGB": default_input_rgb,
                 "Custom input CMYK": default_input_cmyk,
                 "Custom pallet": default_pallet,
-                "Custom spray": custom_spray_amount,
             }
         grouped[key]["Files"] += 1
         grouped[key].setdefault("_source_setup_values", set())
@@ -3467,17 +3479,101 @@ def batch_target_options(preview: dict, table_rows: list[dict[str, Any]]) -> dic
     }
 
 
-def build_batch_mapping_overrides(rows: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+def build_spray_rule_rows(table_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in table_rows:
+        default_setup = clean_editor_text(row.get("Default setup"))
+        if not default_setup:
+            continue
+        key = normalize_lookup(default_setup)
+        default_spray = clean_editor_text(row.get("Default spray"))
+        if key not in grouped:
+            spray_mode = SPRAY_MODE_SUGGESTED if default_spray else SPRAY_MODE_SOURCE
+            grouped[key] = {
+                "Rule key": key,
+                "Files": 0,
+                "Default setup": default_setup,
+                "Suggested spray": default_spray,
+                "Spray mode": spray_mode,
+                "Custom spray": None,
+            }
+        grouped[key]["Files"] += int(row.get("Files") or 0)
+        if default_spray and not grouped[key].get("Suggested spray"):
+            grouped[key]["Suggested spray"] = default_spray
+            grouped[key]["Spray mode"] = SPRAY_MODE_SUGGESTED
+
+    return sorted(grouped.values(), key=lambda row: normalize_lookup(str(row["Default setup"])))
+
+
+def build_spray_rules(rows: list[dict[str, Any]]) -> dict[str, str]:
+    rules: dict[str, str] = {}
+    for row in rows:
+        key = clean_editor_text(row.get("Rule key"))
+        if not key:
+            continue
+
+        mode = clean_editor_text(row.get("Spray mode"))
+        if mode == SPRAY_MODE_SOURCE:
+            rules[key] = ""
+        elif mode == SPRAY_MODE_CUSTOM:
+            rules[key] = clean_editor_text(row.get("Custom spray"))
+        else:
+            rules[key] = clean_editor_text(row.get("Suggested spray"))
+    return rules
+
+
+def apply_spray_labels(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    labeled_rows: list[dict[str, Any]] = []
+    for row in rows:
+        labeled_row = dict(row)
+        mode = clean_editor_text(row.get("Spray mode"))
+        custom_spray = clean_editor_text(row.get("Custom spray"))
+        if mode != SPRAY_MODE_CUSTOM:
+            labeled_row["Custom spray"] = None
+            custom_spray = ""
+        labeled_row["Applied spray"] = applied_spray_label(
+            mode,
+            clean_editor_text(row.get("Suggested spray")),
+            custom_spray,
+        )
+        labeled_rows.append(labeled_row)
+    return labeled_rows
+
+
+def spray_rule_value_for_row(row: dict[str, Any], spray_rules: dict[str, str]) -> str:
+    default_setup_key = normalize_lookup(clean_editor_text(row.get("Default setup")))
+    if not default_setup_key:
+        return ""
+    return clean_editor_text(spray_rules.get(default_setup_key))
+
+
+def apply_final_spray_to_mapping_rows(
+    rows: list[dict[str, Any]],
+    spray_rules: dict[str, str],
+) -> list[dict[str, Any]]:
+    display_rows: list[dict[str, Any]] = []
+    for row in rows:
+        display_row = dict(row)
+        spray_amount = spray_rule_value_for_row(row, spray_rules)
+        display_row["Final SprayAmount"] = spray_amount or "Source SprayAmount"
+        display_rows.append(display_row)
+    return display_rows
+
+
+def build_batch_mapping_overrides(
+    rows: list[dict[str, Any]],
+    spray_rules: dict[str, str],
+) -> dict[str, dict[str, str]]:
     overrides: dict[str, dict[str, str]] = {}
     for row in rows:
         key = str(row.get("Override key") or "")
         if not key:
             continue
 
+        spray_amount = spray_rule_value_for_row(row, spray_rules)
         if not bool(row.get("Use custom")):
-            default_spray_amount = clean_editor_text(row.get("Default spray"))
-            if default_spray_amount:
-                overrides[key] = {"target_spray_amount": default_spray_amount}
+            if spray_amount:
+                overrides[key] = {"target_spray_amount": spray_amount}
             continue
 
         override = {
@@ -3488,9 +3584,9 @@ def build_batch_mapping_overrides(rows: list[dict[str, Any]]) -> dict[str, dict[
             "target_input_rgb": clean_editor_text(row.get("Custom input RGB")),
             "target_input_cmyk": clean_editor_text(row.get("Custom input CMYK")),
             "target_pallet": clean_editor_text(row.get("Custom pallet")),
-            "target_spray_amount": clean_editor_text(row.get("Custom spray"))
-            or clean_editor_text(row.get("Default spray")),
         }
+        if spray_amount:
+            override["target_spray_amount"] = spray_amount
         if any(override.values()):
             overrides[key] = override
     return overrides
@@ -3510,8 +3606,8 @@ def render_batch_mapping_editor(preview: dict, session_prefix: str) -> tuple[dic
 
     st.subheader("Batch output mapping")
     st.caption(
-        "Each row is a group found in the uploaded KSF batch. The `Default spray` value is applied automatically. "
-        "Check `Use custom` only for rows where this batch needs a different target output or a different spray value."
+        "Each row is a group found in the uploaded KSF batch. Use `Custom?` only when this batch needs a different "
+        "target setup, media, ICC, or pallet. SprayAmount is controlled by the Spray rules table."
     )
     if target_family in {"plus", "poly"}:
         selected_pallet_output_format = st.radio(
@@ -3551,104 +3647,158 @@ def render_batch_mapping_editor(preview: dict, session_prefix: str) -> tuple[dic
         else:
             st.caption("Standard Plus pallets will use the default recommended Poly pallet name.")
 
-    st.markdown(
-        """
-        <div class="custom-output-guide">
-            <strong>Custom output columns</strong>
-            <span>Pastel green marks the editable output area. Default spray is automatic; turn on <code>Custom?</code> only for one-off output or spray changes.</span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    editor_data: Any = table_rows
-    try:
-        import pandas as pd
+    spray_rule_rows = build_spray_rule_rows(table_rows)
+    spray_rules: dict[str, str] = {}
+    if spray_rule_rows:
+        st.subheader("Spray rules")
+        st.caption(
+            "Spray rules are grouped by output setup. Choose source values when a customer must keep each original "
+            "KSF SprayAmount, suggested values for Light 15 and Color/Black/Dark 65, or one custom value for that output setup."
+        )
+        st.info(
+            "To keep the value from each original KSF, change `Spray mode` to `Use source SprayAmount`. "
+            "`Suggested spray` is only a reference, and `Custom spray` is used only with `Custom value`."
+        )
+        spray_editor_rows = st.data_editor(
+            spray_rule_rows,
+            key=f"{session_prefix}_spray_rules_editor_v1",
+            hide_index=True,
+            use_container_width=True,
+            disabled=[
+                "Rule key",
+                "Files",
+                "Default setup",
+                "Suggested spray",
+            ],
+            column_config={
+                "Rule key": None,
+                "Files": st.column_config.NumberColumn("Files", width="small"),
+                "Default setup": st.column_config.TextColumn("Default setup", width=260),
+                "Suggested spray": st.column_config.TextColumn("Suggested spray", width="small"),
+                "Spray mode": st.column_config.SelectboxColumn(
+                    "Spray mode",
+                    options=SPRAY_MODE_OPTIONS,
+                    width=220,
+                ),
+                "Custom spray": st.column_config.NumberColumn(
+                    "Custom spray",
+                    help="Used only when Spray mode is Custom value.",
+                    min_value=0.0,
+                    step=1.0,
+                    width="small",
+                ),
+            },
+        )
+        spray_rule_records = editable_rows_to_records(spray_editor_rows)
+        ignored_custom_count = sum(
+            1
+            for row in spray_rule_records
+            if clean_editor_text(row.get("Spray mode")) != SPRAY_MODE_CUSTOM
+            and clean_editor_text(row.get("Custom spray"))
+        )
+        spray_rule_records = apply_spray_labels(spray_rule_records)
+        spray_rules = build_spray_rules(spray_rule_records)
+        if ignored_custom_count:
+            st.warning(
+                "`Custom spray` is used only when `Spray mode` is `Custom value`. "
+                f"{ignored_custom_count} custom value(s) are currently ignored."
+            )
+        st.dataframe(
+            [
+                {
+                    "Default setup": row.get("Default setup"),
+                    "Final SprayAmount": row.get("Applied spray"),
+                }
+                for row in spray_rule_records
+            ],
+            hide_index=True,
+            use_container_width=True,
+        )
+        source_rule_count = sum(1 for value in spray_rules.values() if not value)
+        fixed_rule_count = sum(1 for value in spray_rules.values() if value)
+        st.caption(
+            f"Spray setup groups: `{len(spray_rule_records)}` | "
+            f"Fixed SprayAmount groups: `{fixed_rule_count}` | "
+            f"Source SprayAmount groups: `{source_rule_count}`"
+        )
 
-        editor_frame = pd.DataFrame(table_rows)
-        custom_columns = [
-            column
-            for column in editor_frame.columns
-            if column == "Use custom" or column.startswith("Custom ")
-        ]
+    mapping_editor_rows = apply_final_spray_to_mapping_rows(table_rows, spray_rules)
 
-        def highlight_custom_columns(_: Any) -> Any:
-            styles = pd.DataFrame("", index=editor_frame.index, columns=editor_frame.columns)
-            styles.loc[:, custom_columns] = "background-color: #eef9f0;"
-            return styles
+    with st.expander("Advanced output mapping", expanded=False):
+        st.markdown(
+            """
+            <div class="custom-output-guide">
+                <strong>Custom output columns</strong>
+                <span>Use this table only for one-off setup, media, ICC, or pallet changes. SprayAmount is controlled by the Spray rules table above.</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-        editor_data = editor_frame.style.apply(highlight_custom_columns, axis=None)
-    except Exception:
-        editor_data = table_rows
-
-    edited_rows = st.data_editor(
-        editor_data,
-        key=f"{session_prefix}_batch_mapping_editor_v4",
-        hide_index=True,
-        use_container_width=True,
-        disabled=[
-            "Override key",
-            "Files",
-            "Route",
-            "Source setup",
-            "Source media",
-            "Source output ICC",
-            "Source input RGB",
-            "Source setups",
-            "Default setup",
-            "Default media",
-            "Default output ICC",
-            "Default input RGB",
-            "Default input CMYK",
-            "Default pallet",
-            "Default base setup",
-            "Default spray",
-        ],
-        column_config={
-            "Override key": None,
-            "Files": st.column_config.NumberColumn("Files", width="small"),
-            "Route": None,
-            "Source setup": st.column_config.TextColumn("Source setup", width=230),
-            "Source media": st.column_config.TextColumn("Source media", width=220),
-            "Source output ICC": st.column_config.TextColumn("Source output ICC", width=230),
-            "Source input RGB": st.column_config.TextColumn("Source input RGB", width=210),
-            "Source setups": st.column_config.NumberColumn("Source setups", width="small"),
-            "Default setup": st.column_config.TextColumn("Default setup", width=230),
-            "Default media": st.column_config.TextColumn("Default media", width=230),
-            "Default output ICC": st.column_config.TextColumn("Default output ICC", width=230),
-            "Default input RGB": None,
-            "Default input CMYK": None,
-            "Default pallet": None,
-            "Default base setup": None,
-            "Default spray": st.column_config.TextColumn("Default spray", width="small"),
-            "Use custom": st.column_config.CheckboxColumn("Custom?", width="small"),
-            "Custom setup": st.column_config.SelectboxColumn("Custom setup", options=options["setup"], width=250),
-            "Custom base setup": st.column_config.SelectboxColumn("Custom base setup", options=options["base_setup"], width=260),
-            "Custom media": st.column_config.SelectboxColumn("Custom media", options=options["media"], width=250),
-            "Custom output ICC": st.column_config.SelectboxColumn("Custom output ICC", options=options["output_icc"], width=230),
-            "Custom input RGB": (
-                st.column_config.SelectboxColumn("Custom input RGB", options=options["input_rgb"], width=210)
-                if has_input_rgb_options
-                else None
-            ),
-            "Custom input CMYK": (
-                st.column_config.SelectboxColumn("Custom input CMYK", options=options["input_cmyk"], width=210)
-                if has_input_cmyk_options
-                else None
-            ),
-            "Custom pallet": st.column_config.SelectboxColumn("Custom pallet", options=options["pallet"], width=220),
-            "Custom spray": st.column_config.NumberColumn(
-                "Custom spray",
-                min_value=0.0,
-                step=1.0,
-                width="small",
-                help="Writes this value as the final SprayAmount when Custom? is enabled.",
-            ),
-        },
-    )
+        edited_rows = st.data_editor(
+            mapping_editor_rows,
+            key=f"{session_prefix}_batch_mapping_editor_v6",
+            hide_index=True,
+            use_container_width=True,
+            disabled=[
+                "Override key",
+                "Files",
+                "Route",
+                "Source setup",
+                "Source media",
+                "Source output ICC",
+                "Source input RGB",
+                "Source setups",
+                "Default setup",
+                "Default media",
+                "Default output ICC",
+                "Default input RGB",
+                "Default input CMYK",
+                "Default pallet",
+                "Default base setup",
+                "Default spray",
+                "Final SprayAmount",
+            ],
+            column_config={
+                "Override key": None,
+                "Files": st.column_config.NumberColumn("Files", width="small"),
+                "Route": None,
+                "Source setup": st.column_config.TextColumn("Source setup", width=230),
+                "Source media": st.column_config.TextColumn("Source media", width=220),
+                "Source output ICC": st.column_config.TextColumn("Source output ICC", width=230),
+                "Source input RGB": st.column_config.TextColumn("Source input RGB", width=210),
+                "Source setups": st.column_config.NumberColumn("Source setups", width="small"),
+                "Default setup": st.column_config.TextColumn("Default setup", width=230),
+                "Default media": st.column_config.TextColumn("Default media", width=230),
+                "Default output ICC": st.column_config.TextColumn("Default output ICC", width=230),
+                "Default input RGB": None,
+                "Default input CMYK": None,
+                "Default pallet": None,
+                "Default base setup": None,
+                "Default spray": None,
+                "Final SprayAmount": st.column_config.TextColumn("Final SprayAmount", width="small"),
+                "Use custom": st.column_config.CheckboxColumn("Custom?", width="small"),
+                "Custom setup": st.column_config.SelectboxColumn("Custom setup", options=options["setup"], width=250),
+                "Custom base setup": st.column_config.SelectboxColumn("Custom base setup", options=options["base_setup"], width=260),
+                "Custom media": st.column_config.SelectboxColumn("Custom media", options=options["media"], width=250),
+                "Custom output ICC": st.column_config.SelectboxColumn("Custom output ICC", options=options["output_icc"], width=230),
+                "Custom input RGB": (
+                    st.column_config.SelectboxColumn("Custom input RGB", options=options["input_rgb"], width=210)
+                    if has_input_rgb_options
+                    else None
+                ),
+                "Custom input CMYK": (
+                    st.column_config.SelectboxColumn("Custom input CMYK", options=options["input_cmyk"], width=210)
+                    if has_input_cmyk_options
+                    else None
+                ),
+                "Custom pallet": st.column_config.SelectboxColumn("Custom pallet", options=options["pallet"], width=220),
+            },
+        )
     records = editable_rows_to_records(edited_rows)
     override_count = sum(1 for row in records if bool(row.get("Use custom")))
     st.caption(f"Unique mapping groups: `{len(records)}` | Custom rows changed: `{override_count}`")
-    return build_batch_mapping_overrides(records), selected_pallet_output_format, selected_poly_standard_pallet
+    return build_batch_mapping_overrides(records, spray_rules), selected_pallet_output_format, selected_poly_standard_pallet
 
 
 def render_preview_legacy(preview: dict) -> None:
