@@ -2373,6 +2373,12 @@ def apply_spray_amount_delta(root: ET.Element, spray_delta: float) -> None:
         apply_delta_to_tag(root, "SprayAmount", spray_delta)
 
 
+def apply_fixed_spray_amount(root: ET.Element, fixed_spray_amount: float | None) -> None:
+    if fixed_spray_amount is None:
+        return
+    apply_absolute_to_tag(root, "SprayAmount", fixed_spray_amount)
+
+
 def batch_override_key(
     route: str,
     source_setup: str,
@@ -2453,6 +2459,7 @@ def build_converted_root(
     y_delta: float,
     y_offset_absolute: float | None,
     spray_delta: float,
+    fixed_spray_amount: float | None = None,
     separation_mode: str = SEPARATION_MODE_STANDARD,
     custom_separations: dict[str, dict[str, str]] | None = None,
     white_setting_mode: str = WHITE_SETTING_MODE_STANDARD,
@@ -2519,6 +2526,7 @@ def build_converted_root(
 
     apply_spray_amount_delta(target_root, spray_delta)
     apply_batch_spray_override(target_root, batch_override)
+    apply_fixed_spray_amount(target_root, fixed_spray_amount)
     apply_offset_delta(target_root, x_delta, y_delta)
     apply_y_offset_absolute(target_root, y_offset_absolute)
     sync_strip_geometry_from_root(target_root)
@@ -2542,6 +2550,7 @@ def convert_one(
     y_delta: float,
     y_offset_absolute: float | None = None,
     spray_delta: float = 0.0,
+    fixed_spray_amount: float | None = None,
 ) -> None:
     source_tree = load_xml(source_path)
     source_root = cast(ET.Element, source_tree.getroot())
@@ -2556,6 +2565,7 @@ def convert_one(
         y_delta=y_delta,
         y_offset_absolute=y_offset_absolute,
         spray_delta=spray_delta,
+        fixed_spray_amount=fixed_spray_amount,
         separation_mode=SEPARATION_MODE_STANDARD,
         custom_separations=None,
         white_setting_mode=WHITE_SETTING_MODE_STANDARD,
@@ -2701,6 +2711,7 @@ def convert_sources(
     y_delta: float,
     y_offset_absolute: float | None,
     spray_delta: float,
+    fixed_spray_amount: float | None = None,
     separation_mode: str = SEPARATION_MODE_STANDARD,
     custom_separations: dict[str, dict[str, str]] | None = None,
     white_setting_mode: str = WHITE_SETTING_MODE_STANDARD,
@@ -2731,6 +2742,7 @@ def convert_sources(
                     y_delta=y_delta,
                     y_offset_absolute=y_offset_absolute,
                     spray_delta=spray_delta,
+                    fixed_spray_amount=fixed_spray_amount,
                     separation_mode=separation_mode,
                     custom_separations=custom_separations,
                     white_setting_mode=white_setting_mode,
@@ -2751,6 +2763,7 @@ def convert_sources(
                     y_delta=y_delta,
                     y_offset_absolute=y_offset_absolute,
                     spray_delta=spray_delta,
+                    fixed_spray_amount=fixed_spray_amount,
                     separation_mode=separation_mode,
                     custom_separations=custom_separations,
                     white_setting_mode=white_setting_mode,
@@ -2763,6 +2776,7 @@ def convert_sources(
             )
             apply_batch_mapping_override(converted_root, batch_override)
             apply_batch_spray_override(converted_root, batch_override)
+            apply_fixed_spray_amount(converted_root, fixed_spray_amount)
             ensure_converted_output_is_mapped(converted_root, mixed_route_label(mixed_direction))
             results.append(
                 ConvertedItem(
@@ -2799,6 +2813,7 @@ def build_converted_root_cross(
     y_delta: float,
     y_offset_absolute: float | None,
     spray_delta: float,
+    fixed_spray_amount: float | None = None,
     pallet_override: str | None = None,
     matrix_pallet_mode: str = MATRIX_PALLET_MODE_MAPPING,
     separation_mode: str = SEPARATION_MODE_STANDARD,
@@ -2941,6 +2956,7 @@ def build_converted_root_cross(
 
     apply_spray_amount_delta(target_root, spray_delta)
     apply_batch_spray_override(target_root, batch_override)
+    apply_fixed_spray_amount(target_root, fixed_spray_amount)
     apply_offset_delta(target_root, x_delta, y_delta)
     apply_y_offset_absolute(target_root, y_offset_absolute)
     sync_strip_geometry_from_root(target_root)
@@ -3056,6 +3072,7 @@ def convert_sources_cross(
     y_delta: float,
     y_offset_absolute: float | None,
     spray_delta: float,
+    fixed_spray_amount: float | None = None,
     pallet_override: str | None = None,
     matrix_pallet_mode: str = MATRIX_PALLET_MODE_MAPPING,
     separation_mode: str = SEPARATION_MODE_STANDARD,
@@ -3086,6 +3103,7 @@ def convert_sources_cross(
                 y_delta=y_delta,
                 y_offset_absolute=y_offset_absolute,
                 spray_delta=spray_delta,
+                fixed_spray_amount=fixed_spray_amount,
                 pallet_override=pallet_override,
                 matrix_pallet_mode=matrix_pallet_mode,
                 separation_mode=separation_mode,
@@ -4160,6 +4178,7 @@ def render_conversion_workspace(
     x_delta = 0.0
     y_delta = 0.0
     y_offset_absolute: float | None = None
+    fixed_spray_amount: float | None = None
 
     default_template_name, default_template_bytes = load_default_template_bytes()
     uploader_nonce_key = f"{session_prefix}_uploader_nonce"
@@ -4682,6 +4701,20 @@ def render_conversion_workspace(
         key=f"{session_prefix}_spray_delta",
     )
     st.caption(f"Output SprayAmount adjustment: `{spray_delta:+g}`")
+    use_fixed_spray_amount = st.checkbox(
+        "Set fixed SprayAmount for all files",
+        value=False,
+        help="When enabled, every converted KSF gets this exact SprayAmount. This overrides the delta and any spray rules from the batch mapping table.",
+        key=f"{session_prefix}_use_fixed_spray_amount",
+    )
+    if use_fixed_spray_amount:
+        fixed_spray_amount = st.number_input(
+            "Fixed SprayAmount",
+            value=50.0,
+            step=1.0,
+            key=f"{session_prefix}_fixed_spray_amount",
+        )
+        st.caption(f"Every output KSF will use SprayAmount `{fixed_spray_amount:g}`.")
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
@@ -4805,6 +4838,7 @@ def render_conversion_workspace(
                 y_delta=float(y_delta),
                 y_offset_absolute=float(y_offset_absolute) if y_offset_absolute is not None else None,
                 spray_delta=float(spray_delta),
+                fixed_spray_amount=float(fixed_spray_amount) if fixed_spray_amount is not None else None,
             )
             if direction_value is not None:
                 convert_kwargs["direction"] = direction_value
