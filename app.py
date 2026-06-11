@@ -2377,6 +2377,7 @@ def apply_fixed_spray_amount(root: ET.Element, fixed_spray_amount: float | None)
     if fixed_spray_amount is None:
         return
     apply_absolute_to_tag(root, "SprayAmount", fixed_spray_amount)
+    apply_absolute_to_tag(root, "LinearSprayAmount", fixed_spray_amount)
 
 
 def batch_override_key(
@@ -4754,9 +4755,9 @@ def render_conversion_workspace(
     )
     st.caption(f"Output SprayAmount adjustment: `{spray_delta:+g}`")
     use_fixed_spray_amount = st.checkbox(
-        "Set fixed SprayAmount for all files",
+        "Set fixed SprayAmount and LinearSprayAmount for all files",
         value=False,
-        help="When enabled, every converted KSF gets this exact SprayAmount. This overrides the delta and any spray rules from the batch mapping table.",
+        help="When enabled, every converted KSF gets this exact SprayAmount and LinearSprayAmount. This overrides the delta and any spray rules from the batch mapping table.",
         key=f"{session_prefix}_use_fixed_spray_amount",
     )
     if use_fixed_spray_amount:
@@ -4766,19 +4767,19 @@ def render_conversion_workspace(
             step=1.0,
             key=f"{session_prefix}_fixed_spray_amount",
         )
-        st.caption(f"Every output KSF will use SprayAmount `{fixed_spray_amount:g}`.")
+        st.caption(f"Every output KSF will use SprayAmount and LinearSprayAmount `{fixed_spray_amount:g}`.")
         spray_only_mode = st.checkbox(
-            "Update SprayAmount only; do not convert or remap files",
+            "Update spray amounts only; do not convert or remap files",
             value=False,
             help=(
                 "Use this when the uploaded KSF files already belong to the correct machine/setup and only "
-                "need the SprayAmount changed. This skips spreadsheet mapping, templates, setup changes, "
+                "need SprayAmount and LinearSprayAmount changed. This skips spreadsheet mapping, templates, setup changes, "
                 "media changes, ICC changes, and offset changes."
             ),
             key=f"{session_prefix}_spray_only_mode",
         )
         if spray_only_mode:
-            st.caption("Spray-only mode will preserve each source KSF and change only its SprayAmount.")
+            st.caption("Spray-only mode will preserve each source KSF and change only SprayAmount and LinearSprayAmount.")
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
