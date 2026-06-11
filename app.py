@@ -3137,6 +3137,57 @@ def convert_sources_cross(
     return results
 
 
+def update_sources_fixed_spray_only(
+    source_parts: list[SourceItem],
+    fixed_spray_amount: float,
+) -> list[ConvertedItem]:
+    results: list[ConvertedItem] = []
+    for source in source_parts:
+        output_path = Path("converted") / "spray-only" / source.relative_path
+        try:
+            root = parse_ksf_bytes(source.data)
+            apply_fixed_spray_amount(root, fixed_spray_amount)
+            results.append(
+                ConvertedItem(
+                    relative_path=source.relative_path,
+                    output_path=output_path,
+                    data=serialize_xml(root),
+                    status="converted",
+                    error=None,
+                )
+            )
+        except Exception as exc:
+            results.append(
+                ConvertedItem(
+                    relative_path=source.relative_path,
+                    output_path=output_path,
+                    data=None,
+                    status="error",
+                    error=str(exc),
+                )
+            )
+    return results
+
+
+def build_spray_only_report(
+    converted_items: list[ConvertedItem],
+    fixed_spray_amount: float,
+) -> dict:
+    return {
+        "mode": "spray-only",
+        "fixed_spray_amount": format_number(fixed_spray_amount, str(fixed_spray_amount)),
+        "items": [
+            {
+                "filename": item.relative_path.as_posix(),
+                "output_path": item.output_path.as_posix(),
+                "conversion_status": item.status,
+                "error": item.error,
+            }
+            for item in converted_items
+        ],
+    }
+
+
 def build_conversion_report(preview: dict, converted_items: list[ConvertedItem]) -> dict:
     status_map = {item.relative_path.as_posix(): item for item in converted_items}
     report_items = []
@@ -4179,6 +4230,7 @@ def render_conversion_workspace(
     y_delta = 0.0
     y_offset_absolute: float | None = None
     fixed_spray_amount: float | None = None
+    spray_only_mode = False
 
     default_template_name, default_template_bytes = load_default_template_bytes()
     uploader_nonce_key = f"{session_prefix}_uploader_nonce"
@@ -4715,6 +4767,18 @@ def render_conversion_workspace(
             key=f"{session_prefix}_fixed_spray_amount",
         )
         st.caption(f"Every output KSF will use SprayAmount `{fixed_spray_amount:g}`.")
+        spray_only_mode = st.checkbox(
+            "Update SprayAmount only; do not convert or remap files",
+            value=False,
+            help=(
+                "Use this when the uploaded KSF files already belong to the correct machine/setup and only "
+                "need the SprayAmount changed. This skips spreadsheet mapping, templates, setup changes, "
+                "media changes, ICC changes, and offset changes."
+            ),
+            key=f"{session_prefix}_spray_only_mode",
+        )
+        if spray_only_mode:
+            st.caption("Spray-only mode will preserve each source KSF and change only its SprayAmount.")
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
@@ -4811,47 +4875,71 @@ def render_conversion_workspace(
         st.markdown("</div>", unsafe_allow_html=True)
 
     if convert_clicked:
-        if not source_parts or not template_bytes:
+        if not source_parts or (not template_bytes and not spray_only_mode):
             if not source_parts and source_error:
                 st.error(source_error)
             else:
                 st.error(analyze_error)
         else:
             resolved_template_name = template_name or "atlas-template.ksf"
-            if direction_value is None:
-                preview = build_preview_fn(source_parts, resolved_template_name, template_bytes)
-            else:
-                preview = build_preview_fn(
+            if spray_only_mode and fixed_spray_amount is not None:
+                preview = {
+                    "template_filename": "Not used",
+                    "template": {},
+                    "items": [
+                        {
+                            "filename": source.relative_path.as_posix(),
+                            "origin": source.origin,
+                            "status": "ready",
+                            "source": {},
+                            "template": {},
+                            "warnings": [],
+                            "error": None,
+                        }
+                        for source in source_parts
+                    ],
+                }
+                st.session_state[preview_key] = preview
+                converted_items = update_sources_fixed_spray_only(
                     source_parts,
-                    resolved_template_name,
-                    template_bytes,
-                    direction_value,
+                    float(fixed_spray_amount),
                 )
-            st.session_state[preview_key] = preview
-            convert_kwargs = dict(
-                source_parts=source_parts,
-                template_bytes=template_bytes,
-                geometry_mode=geometry_mode,
-                copies_mode=copies_mode,
-                set_name_mode=set_name_mode,
-                x_delta=float(x_delta),
-                y_delta=float(y_delta),
-                y_offset_absolute=float(y_offset_absolute) if y_offset_absolute is not None else None,
-                spray_delta=float(spray_delta),
-                fixed_spray_amount=float(fixed_spray_amount) if fixed_spray_amount is not None else None,
-            )
-            if direction_value is not None:
-                convert_kwargs["direction"] = direction_value
-                convert_kwargs["matrix_pallet_mode"] = selected_matrix_pallet_mode
-            convert_kwargs["pallet_output_format"] = selected_pallet_output_format
-            convert_kwargs["poly_standard_pallet"] = selected_poly_standard_pallet
-            convert_kwargs["separation_mode"] = selected_separation_mode
-            convert_kwargs["custom_separations"] = selected_custom_separations
-            convert_kwargs["white_setting_mode"] = selected_white_setting_mode
-            convert_kwargs["custom_white_settings"] = selected_custom_white_settings
-            convert_kwargs["batch_mapping_overrides"] = batch_mapping_overrides
-            converted_items = convert_sources_fn(**convert_kwargs)
-            report = build_conversion_report(preview, converted_items)
+                report = build_spray_only_report(converted_items, float(fixed_spray_amount))
+            else:
+                if direction_value is None:
+                    preview = build_preview_fn(source_parts, resolved_template_name, template_bytes)
+                else:
+                    preview = build_preview_fn(
+                        source_parts,
+                        resolved_template_name,
+                        template_bytes,
+                        direction_value,
+                    )
+                st.session_state[preview_key] = preview
+                convert_kwargs = dict(
+                    source_parts=source_parts,
+                    template_bytes=template_bytes,
+                    geometry_mode=geometry_mode,
+                    copies_mode=copies_mode,
+                    set_name_mode=set_name_mode,
+                    x_delta=float(x_delta),
+                    y_delta=float(y_delta),
+                    y_offset_absolute=float(y_offset_absolute) if y_offset_absolute is not None else None,
+                    spray_delta=float(spray_delta),
+                    fixed_spray_amount=float(fixed_spray_amount) if fixed_spray_amount is not None else None,
+                )
+                if direction_value is not None:
+                    convert_kwargs["direction"] = direction_value
+                    convert_kwargs["matrix_pallet_mode"] = selected_matrix_pallet_mode
+                convert_kwargs["pallet_output_format"] = selected_pallet_output_format
+                convert_kwargs["poly_standard_pallet"] = selected_poly_standard_pallet
+                convert_kwargs["separation_mode"] = selected_separation_mode
+                convert_kwargs["custom_separations"] = selected_custom_separations
+                convert_kwargs["white_setting_mode"] = selected_white_setting_mode
+                convert_kwargs["custom_white_settings"] = selected_custom_white_settings
+                convert_kwargs["batch_mapping_overrides"] = batch_mapping_overrides
+                converted_items = convert_sources_fn(**convert_kwargs)
+                report = build_conversion_report(preview, converted_items)
             st.session_state[converted_items_key] = converted_items
             st.session_state[conversion_report_key] = report
             st.session_state[zip_bytes_key] = generate_zip_bundle(converted_items, report)
