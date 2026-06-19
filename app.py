@@ -1825,6 +1825,7 @@ def detect_profile(root: ET.Element) -> dict:
         "y_offset": get_text(root, "YOffsetMM"),
         "spray_amount": get_text(root, "SprayAmount"),
         "linear_spray_amount": get_text(root, "LinearSprayAmount"),
+        "color_brightness": get_text(root, "ColorBrightness"),
         "max_opacity": get_text(root, "MaxOpacity"),
         "min_opacity": get_text(root, "MinOpacity"),
         "choke_white_pixels": get_text(root, "ChokeWhitePixels"),
@@ -2380,6 +2381,12 @@ def apply_fixed_spray_amount(root: ET.Element, fixed_spray_amount: float | None)
     apply_absolute_to_tag(root, "LinearSprayAmount", fixed_spray_amount)
 
 
+def apply_color_brightness(root: ET.Element, color_brightness: float | None) -> None:
+    if color_brightness is None:
+        return
+    apply_absolute_to_tag(root, "ColorBrightness", color_brightness)
+
+
 def batch_override_key(
     route: str,
     source_setup: str,
@@ -2461,6 +2468,7 @@ def build_converted_root(
     y_offset_absolute: float | None,
     spray_delta: float,
     fixed_spray_amount: float | None = None,
+    color_brightness: float | None = None,
     separation_mode: str = SEPARATION_MODE_STANDARD,
     custom_separations: dict[str, dict[str, str]] | None = None,
     white_setting_mode: str = WHITE_SETTING_MODE_STANDARD,
@@ -2528,6 +2536,7 @@ def build_converted_root(
     apply_spray_amount_delta(target_root, spray_delta)
     apply_batch_spray_override(target_root, batch_override)
     apply_fixed_spray_amount(target_root, fixed_spray_amount)
+    apply_color_brightness(target_root, color_brightness)
     apply_offset_delta(target_root, x_delta, y_delta)
     apply_y_offset_absolute(target_root, y_offset_absolute)
     sync_strip_geometry_from_root(target_root)
@@ -2552,6 +2561,7 @@ def convert_one(
     y_offset_absolute: float | None = None,
     spray_delta: float = 0.0,
     fixed_spray_amount: float | None = None,
+    color_brightness: float | None = None,
 ) -> None:
     source_tree = load_xml(source_path)
     source_root = cast(ET.Element, source_tree.getroot())
@@ -2567,6 +2577,7 @@ def convert_one(
         y_offset_absolute=y_offset_absolute,
         spray_delta=spray_delta,
         fixed_spray_amount=fixed_spray_amount,
+        color_brightness=color_brightness,
         separation_mode=SEPARATION_MODE_STANDARD,
         custom_separations=None,
         white_setting_mode=WHITE_SETTING_MODE_STANDARD,
@@ -2713,6 +2724,7 @@ def convert_sources(
     y_offset_absolute: float | None,
     spray_delta: float,
     fixed_spray_amount: float | None = None,
+    color_brightness: float | None = None,
     separation_mode: str = SEPARATION_MODE_STANDARD,
     custom_separations: dict[str, dict[str, str]] | None = None,
     white_setting_mode: str = WHITE_SETTING_MODE_STANDARD,
@@ -2744,6 +2756,7 @@ def convert_sources(
                     y_offset_absolute=y_offset_absolute,
                     spray_delta=spray_delta,
                     fixed_spray_amount=fixed_spray_amount,
+                    color_brightness=color_brightness,
                     separation_mode=separation_mode,
                     custom_separations=custom_separations,
                     white_setting_mode=white_setting_mode,
@@ -2765,6 +2778,7 @@ def convert_sources(
                     y_offset_absolute=y_offset_absolute,
                     spray_delta=spray_delta,
                     fixed_spray_amount=fixed_spray_amount,
+                    color_brightness=color_brightness,
                     separation_mode=separation_mode,
                     custom_separations=custom_separations,
                     white_setting_mode=white_setting_mode,
@@ -2778,6 +2792,7 @@ def convert_sources(
             apply_batch_mapping_override(converted_root, batch_override)
             apply_batch_spray_override(converted_root, batch_override)
             apply_fixed_spray_amount(converted_root, fixed_spray_amount)
+            apply_color_brightness(converted_root, color_brightness)
             ensure_converted_output_is_mapped(converted_root, mixed_route_label(mixed_direction))
             results.append(
                 ConvertedItem(
@@ -2815,6 +2830,7 @@ def build_converted_root_cross(
     y_offset_absolute: float | None,
     spray_delta: float,
     fixed_spray_amount: float | None = None,
+    color_brightness: float | None = None,
     pallet_override: str | None = None,
     matrix_pallet_mode: str = MATRIX_PALLET_MODE_MAPPING,
     separation_mode: str = SEPARATION_MODE_STANDARD,
@@ -2958,6 +2974,7 @@ def build_converted_root_cross(
     apply_spray_amount_delta(target_root, spray_delta)
     apply_batch_spray_override(target_root, batch_override)
     apply_fixed_spray_amount(target_root, fixed_spray_amount)
+    apply_color_brightness(target_root, color_brightness)
     apply_offset_delta(target_root, x_delta, y_delta)
     apply_y_offset_absolute(target_root, y_offset_absolute)
     sync_strip_geometry_from_root(target_root)
@@ -3074,6 +3091,7 @@ def convert_sources_cross(
     y_offset_absolute: float | None,
     spray_delta: float,
     fixed_spray_amount: float | None = None,
+    color_brightness: float | None = None,
     pallet_override: str | None = None,
     matrix_pallet_mode: str = MATRIX_PALLET_MODE_MAPPING,
     separation_mode: str = SEPARATION_MODE_STANDARD,
@@ -3105,6 +3123,7 @@ def convert_sources_cross(
                 y_offset_absolute=y_offset_absolute,
                 spray_delta=spray_delta,
                 fixed_spray_amount=fixed_spray_amount,
+                color_brightness=color_brightness,
                 pallet_override=pallet_override,
                 matrix_pallet_mode=matrix_pallet_mode,
                 separation_mode=separation_mode,
@@ -3138,16 +3157,98 @@ def convert_sources_cross(
     return results
 
 
-def update_sources_fixed_spray_only(
+def modification_route_label(direction: str | None) -> str:
+    return direction or "Already converted"
+
+
+def build_already_converted_preview(
+    files: list[SourceItem],
+    direction: str | None = None,
+) -> dict:
+    route = modification_route_label(direction)
+    items = []
+    for item in files:
+        filename = item.relative_path.as_posix()
+        try:
+            root = parse_ksf_bytes(item.data)
+            source_info = detect_profile(root)
+            source_info["conversion_route"] = route
+            source_info["output_folder"] = "converted/already-converted"
+            source_info["mapping_status"] = "current-values"
+            source_info["mapping_source"] = "source KSF"
+            current_setup = source_info.get("set_applied") or source_info.get("last_base_setup_name") or ""
+            source_info["mapped_atlas_setup"] = current_setup
+            source_info["mapped_atlas_base_setup"] = source_info.get("last_base_setup_name") or current_setup
+            source_info["mapped_atlas_media"] = source_info.get("media_name") or ""
+            source_info["mapped_atlas_output_icc"] = source_info.get("icc_out") or ""
+            source_info["mapped_atlas_input_rgb"] = source_info.get("icc_in_rgb") or ""
+            source_info["mapped_atlas_input_cmyk"] = source_info.get("icc_in_cmyk") or ""
+            source_info["mapped_atlas_pallet"] = source_info.get("table_name") or ""
+            items.append(
+                {
+                    "filename": filename,
+                    "origin": item.origin,
+                    "status": "ready",
+                    "source": source_info,
+                    "template": {},
+                    "warnings": [],
+                    "error": None,
+                }
+            )
+        except ET.ParseError as exc:
+            items.append(
+                {
+                    "filename": filename,
+                    "origin": item.origin,
+                    "status": "error",
+                    "source": None,
+                    "template": {},
+                    "warnings": [],
+                    "error": f"Invalid XML in source file: {exc}",
+                }
+            )
+
+    preview = {
+        "template_filename": "Not used",
+        "template": {},
+        "mapping_workbook": "Not used",
+        "already_converted_mode": True,
+        "items": items,
+    }
+    if direction:
+        preview["direction"] = direction
+    return preview
+
+
+def update_already_converted_sources(
     source_parts: list[SourceItem],
-    fixed_spray_amount: float,
+    route: str,
+    *,
+    spray_delta: float = 0.0,
+    fixed_spray_amount: float | None = None,
+    color_brightness: float | None = None,
+    y_offset_absolute: float | None = None,
+    custom_separations: dict[str, dict[str, str]] | None = None,
+    custom_white_settings: dict[str, str] | None = None,
+    batch_mapping_overrides: dict[str, dict[str, str]] | None = None,
 ) -> list[ConvertedItem]:
     results: list[ConvertedItem] = []
     for source in source_parts:
-        output_path = Path("converted") / "spray-only" / source.relative_path
+        output_path = Path("converted") / "already-converted" / source.relative_path
         try:
             root = parse_ksf_bytes(source.data)
+            batch_override = (batch_mapping_overrides or {}).get(
+                batch_override_key_from_source(root, route)
+            )
+            apply_batch_mapping_override(root, batch_override)
+            apply_custom_special_separations(root, custom_separations)
+            apply_custom_white_settings(root, custom_white_settings)
+            apply_spray_amount_delta(root, spray_delta)
+            apply_batch_spray_override(root, batch_override)
             apply_fixed_spray_amount(root, fixed_spray_amount)
+            apply_color_brightness(root, color_brightness)
+            apply_y_offset_absolute(root, y_offset_absolute)
+            sync_strip_geometry_from_root(root)
             results.append(
                 ConvertedItem(
                     relative_path=source.relative_path,
@@ -3170,23 +3271,38 @@ def update_sources_fixed_spray_only(
     return results
 
 
-def build_spray_only_report(
+def build_already_converted_report(
+    preview: dict,
     converted_items: list[ConvertedItem],
-    fixed_spray_amount: float,
+    *,
+    route: str,
+    fixed_spray_amount: float | None,
+    spray_delta: float,
+    color_brightness: float | None,
+    y_offset_absolute: float | None,
 ) -> dict:
-    return {
-        "mode": "spray-only",
-        "fixed_spray_amount": format_number(fixed_spray_amount, str(fixed_spray_amount)),
-        "items": [
-            {
-                "filename": item.relative_path.as_posix(),
-                "output_path": item.output_path.as_posix(),
-                "conversion_status": item.status,
-                "error": item.error,
-            }
-            for item in converted_items
-        ],
+    report = build_conversion_report(preview, converted_items)
+    report["mode"] = "already-converted-update"
+    report["route"] = route
+    report["applied_global_overrides"] = {
+        "spray_delta": format_number(spray_delta, str(spray_delta)) if spray_delta else "",
+        "fixed_spray_amount": (
+            format_number(fixed_spray_amount, str(fixed_spray_amount))
+            if fixed_spray_amount is not None
+            else ""
+        ),
+        "color_brightness": (
+            format_number(color_brightness, str(color_brightness))
+            if color_brightness is not None
+            else ""
+        ),
+        "y_offset_absolute": (
+            format_number(y_offset_absolute, str(y_offset_absolute))
+            if y_offset_absolute is not None
+            else ""
+        ),
     }
+    return report
 
 
 def build_conversion_report(preview: dict, converted_items: list[ConvertedItem]) -> dict:
@@ -3420,11 +3536,14 @@ def build_batch_mapping_table(preview: dict) -> list[dict[str, Any]]:
                 default_input_rgb = default_input_rgb or "None"
                 default_input_cmyk = default_input_cmyk or "None"
             default_pallet = source.get("mapped_atlas_pallet") or ""
-            default_spray_amount = suggested_spray_amount_for_target(
-                default_setup,
-                default_base_setup,
-                default_media,
-            )
+            if preview.get("already_converted_mode"):
+                default_spray_amount = ""
+            else:
+                default_spray_amount = suggested_spray_amount_for_target(
+                    default_setup,
+                    default_base_setup,
+                    default_media,
+                )
             grouped[key] = {
                 "Override key": key,
                 "Files": 0,
@@ -4231,7 +4350,7 @@ def render_conversion_workspace(
     y_delta = 0.0
     y_offset_absolute: float | None = None
     fixed_spray_amount: float | None = None
-    spray_only_mode = False
+    color_brightness: float | None = None
 
     default_template_name, default_template_bytes = load_default_template_bytes()
     uploader_nonce_key = f"{session_prefix}_uploader_nonce"
@@ -4276,6 +4395,22 @@ def render_conversion_workspace(
         )
 
     st.markdown(f"<div class='{workspace_class}'>", unsafe_allow_html=True)
+
+    st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
+    operation_mode = st.radio(
+        "Workflow mode",
+        options=["Convert KSF files", "Modify already converted KSF files"],
+        horizontal=True,
+        key=f"{session_prefix}_operation_mode",
+    )
+    already_converted_mode = operation_mode == "Modify already converted KSF files"
+    if already_converted_mode:
+        st.caption(
+            "Use this for KSF files that are already converted. The app keeps every existing value unless you enable a custom override below."
+        )
+    else:
+        st.caption("Use this for normal template and spreadsheet-driven conversion.")
+    st.markdown("</div>", unsafe_allow_html=True)
 
     direction_value: str | None = None
     if direction_options:
@@ -4477,46 +4612,52 @@ def render_conversion_workspace(
     with top_right:
         st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
         st.subheader(active_template_heading)
-        use_default_template = st.toggle(
-            active_template_toggle_label,
-            value=active_default_template_bytes is not None,
-            help="If enabled, the app looks for the preferred built-in template for the selected direction inside templates/.",
-            key=f"{session_prefix}_use_default_template",
-        )
-
         template_upload = None
-        selected_builtin_template_name = active_default_template_name
-        selected_builtin_template_bytes = active_default_template_bytes
-        if use_default_template:
-            builtin_template_options = (
-                load_available_template_options(active_preferred_template_names)
-                if active_preferred_template_names
-                else {}
-            )
-            if builtin_template_options:
-                selected_builtin_template_name = st.selectbox(
-                    "Built-in template",
-                    options=list(builtin_template_options.keys()),
-                    index=0,
-                    key=f"{session_prefix}_builtin_template",
-                )
-                selected_builtin_template_bytes = builtin_template_options[selected_builtin_template_name]
-                st.success(f"Built-in template loaded: {selected_builtin_template_name}")
-            elif active_default_template_bytes is not None:
-                st.success(f"Built-in template loaded: {active_default_template_name}")
-            else:
-                st.warning(
-                    "Built-in template for the selected direction was not found inside templates/. Upload the correct output template manually."
-                )
+        if already_converted_mode:
+            use_default_template = False
+            selected_builtin_template_name = None
+            selected_builtin_template_bytes = None
+            st.info("Template not used in already converted mode.")
+            st.caption("Uploaded KSF files are used as their own output base.")
         else:
-            st.caption(active_template_upload_caption)
-            template_upload = st.file_uploader(
-                active_template_upload_label,
-                type=["ksf", "kst"],
-                accept_multiple_files=False,
-                label_visibility="collapsed",
-                key=f"{session_prefix}_template_{uploader_nonce}",
+            use_default_template = st.toggle(
+                active_template_toggle_label,
+                value=active_default_template_bytes is not None,
+                help="If enabled, the app looks for the preferred built-in template for the selected direction inside templates/.",
+                key=f"{session_prefix}_use_default_template",
             )
+            selected_builtin_template_name = active_default_template_name
+            selected_builtin_template_bytes = active_default_template_bytes
+            if use_default_template:
+                builtin_template_options = (
+                    load_available_template_options(active_preferred_template_names)
+                    if active_preferred_template_names
+                    else {}
+                )
+                if builtin_template_options:
+                    selected_builtin_template_name = st.selectbox(
+                        "Built-in template",
+                        options=list(builtin_template_options.keys()),
+                        index=0,
+                        key=f"{session_prefix}_builtin_template",
+                    )
+                    selected_builtin_template_bytes = builtin_template_options[selected_builtin_template_name]
+                    st.success(f"Built-in template loaded: {selected_builtin_template_name}")
+                elif active_default_template_bytes is not None:
+                    st.success(f"Built-in template loaded: {active_default_template_name}")
+                else:
+                    st.warning(
+                        "Built-in template for the selected direction was not found inside templates/. Upload the correct output template manually."
+                    )
+            else:
+                st.caption(active_template_upload_caption)
+                template_upload = st.file_uploader(
+                    active_template_upload_label,
+                    type=["ksf", "kst"],
+                    accept_multiple_files=False,
+                    label_visibility="collapsed",
+                    key=f"{session_prefix}_template_{uploader_nonce}",
+                )
         st.markdown("</div>", unsafe_allow_html=True)
 
     source_parts: list[SourceItem] = []
@@ -4581,19 +4722,30 @@ def render_conversion_workspace(
 
     st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
     st.subheader("Channel separations")
-    selected_separation_mode = st.radio(
-        "Separation values",
-        options=SEPARATION_MODE_OPTIONS,
-        index=0,
-        horizontal=True,
-        help=(
+    if already_converted_mode:
+        separation_options = ["Keep current values", SEPARATION_MODE_CUSTOM]
+        separation_help = (
+            "Keep current values preserves each already converted KSF. "
+            "Customize values lets you override selected channels only."
+        )
+    else:
+        separation_options = SEPARATION_MODE_OPTIONS
+        separation_help = (
             "Use app standard values keeps the approved defaults currently used by this app. "
             "Use source file values copies matching channel separation values from the uploaded KSF. "
             "Customize values lets you override selected channels for this conversion."
-        ),
+        )
+    selected_separation_mode = st.radio(
+        "Separation values",
+        options=separation_options,
+        index=0,
+        horizontal=True,
+        help=separation_help,
         key=f"{session_prefix}_separation_mode",
     )
-    if selected_separation_mode == SEPARATION_MODE_STANDARD:
+    if selected_separation_mode == "Keep current values":
+        st.caption("Existing channel separation values will be preserved.")
+    elif selected_separation_mode == SEPARATION_MODE_STANDARD:
         st.caption("Output KSF files will use the app's approved channel separation defaults.")
     elif selected_separation_mode == SEPARATION_MODE_SOURCE:
         st.caption("Output KSF files will copy matching channel separation values from each source KSF.")
@@ -4679,23 +4831,36 @@ def render_conversion_workspace(
         selected_custom_separations = custom_values or None
         if selected_custom_separations is None:
             st.caption("Select one or more channels to customize.")
+    if already_converted_mode and selected_separation_mode != SEPARATION_MODE_CUSTOM:
+        selected_separation_mode = SEPARATION_MODE_SOURCE
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
     st.subheader("White settings")
-    selected_white_setting_mode = st.radio(
-        "White values",
-        options=WHITE_SETTING_MODE_OPTIONS,
-        index=0,
-        horizontal=True,
-        help=(
+    if already_converted_mode:
+        white_options = ["Keep current values", WHITE_SETTING_MODE_CUSTOM]
+        white_help = (
+            "Keep current values preserves each already converted KSF. "
+            "Customize values lets you override the selected white values only."
+        )
+    else:
+        white_options = WHITE_SETTING_MODE_OPTIONS
+        white_help = (
             "Use app/template standard values keeps the approved white values for the selected output template. "
             "Use source file values copies these values from the uploaded KSF. "
             "Customize values lets you override these values for this conversion."
-        ),
+        )
+    selected_white_setting_mode = st.radio(
+        "White values",
+        options=white_options,
+        index=0,
+        horizontal=True,
+        help=white_help,
         key=f"{session_prefix}_white_setting_mode",
     )
-    if selected_white_setting_mode == WHITE_SETTING_MODE_STANDARD:
+    if selected_white_setting_mode == "Keep current values":
+        st.caption("Existing white values will be preserved.")
+    elif selected_white_setting_mode == WHITE_SETTING_MODE_STANDARD:
         st.caption("Output KSF files will use the approved white values for the selected output template.")
     elif selected_white_setting_mode == WHITE_SETTING_MODE_SOURCE:
         st.caption("Output KSF files will copy these white values from each source KSF.")
@@ -4742,6 +4907,8 @@ def render_conversion_workspace(
             "WBCLUTMaxWhite": format_number(float(wbclut_max_white), str(wbclut_max_white)),
             "WBCWhiteness": format_number(float(wbc_whiteness), str(wbc_whiteness)),
         }
+    if already_converted_mode and selected_white_setting_mode != WHITE_SETTING_MODE_CUSTOM:
+        selected_white_setting_mode = WHITE_SETTING_MODE_SOURCE
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
@@ -4768,18 +4935,28 @@ def render_conversion_workspace(
             key=f"{session_prefix}_fixed_spray_amount",
         )
         st.caption(f"Every output KSF will use SprayAmount and LinearSprayAmount `{fixed_spray_amount:g}`.")
-        spray_only_mode = st.checkbox(
-            "Update spray amounts only; do not convert or remap files",
-            value=False,
-            help=(
-                "Use this when the uploaded KSF files already belong to the correct machine/setup and only "
-                "need SprayAmount and LinearSprayAmount changed. This skips spreadsheet mapping, templates, setup changes, "
-                "media changes, ICC changes, and offset changes."
-            ),
-            key=f"{session_prefix}_spray_only_mode",
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
+    st.subheader("Brightness")
+    use_color_brightness = st.checkbox(
+        "Set fixed ColorBrightness for all files",
+        value=False,
+        help="When enabled, every output KSF gets this exact ColorBrightness value.",
+        key=f"{session_prefix}_use_color_brightness",
+    )
+    if use_color_brightness:
+        color_brightness = st.number_input(
+            "ColorBrightness",
+            value=50.0,
+            min_value=0.0,
+            max_value=100.0,
+            step=1.0,
+            key=f"{session_prefix}_color_brightness",
         )
-        if spray_only_mode:
-            st.caption("Spray-only mode will preserve each source KSF and change only SprayAmount and LinearSprayAmount.")
+        st.caption(f"Every output KSF will use ColorBrightness `{color_brightness:g}`.")
+    else:
+        st.caption("ColorBrightness stays unchanged unless the selected template or mapping workflow changes it.")
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown(f"<div class='{section_card_class}'>", unsafe_allow_html=True)
@@ -4826,7 +5003,12 @@ def render_conversion_workspace(
     with action_a:
         analyze_clicked = st.button("Analyze batch mappings", use_container_width=True, key=f"{session_prefix}_analyze")
     with action_b:
-        convert_clicked = st.button("Convert and export ZIP", type="primary", use_container_width=True, key=f"{session_prefix}_convert")
+        convert_button_label = (
+            "Update already converted KSFs and export ZIP"
+            if already_converted_mode
+            else "Convert and export ZIP"
+        )
+        convert_clicked = st.button(convert_button_label, type="primary", use_container_width=True, key=f"{session_prefix}_convert")
     with action_c:
         st.button(
             "Clear",
@@ -4842,14 +5024,16 @@ def render_conversion_workspace(
         st.error(issue)
 
     if analyze_clicked:
-        if not source_parts or not template_bytes:
+        if not source_parts or (not template_bytes and not already_converted_mode):
             if not source_parts and source_error:
                 st.error(source_error)
             else:
                 st.error(analyze_error)
         else:
             resolved_template_name = template_name or "atlas-template.ksf"
-            if direction_value is None:
+            if already_converted_mode:
+                preview = build_already_converted_preview(source_parts, direction_value)
+            elif direction_value is None:
                 preview = build_preview_fn(source_parts, resolved_template_name, template_bytes)
             else:
                 preview = build_preview_fn(
@@ -4876,36 +5060,37 @@ def render_conversion_workspace(
         st.markdown("</div>", unsafe_allow_html=True)
 
     if convert_clicked:
-        if not source_parts or (not template_bytes and not spray_only_mode):
+        if not source_parts or (not template_bytes and not already_converted_mode):
             if not source_parts and source_error:
                 st.error(source_error)
             else:
                 st.error(analyze_error)
         else:
             resolved_template_name = template_name or "atlas-template.ksf"
-            if spray_only_mode and fixed_spray_amount is not None:
-                preview = {
-                    "template_filename": "Not used",
-                    "template": {},
-                    "items": [
-                        {
-                            "filename": source.relative_path.as_posix(),
-                            "origin": source.origin,
-                            "status": "ready",
-                            "source": {},
-                            "template": {},
-                            "warnings": [],
-                            "error": None,
-                        }
-                        for source in source_parts
-                    ],
-                }
+            if already_converted_mode:
+                route = modification_route_label(direction_value)
+                preview = build_already_converted_preview(source_parts, direction_value)
                 st.session_state[preview_key] = preview
-                converted_items = update_sources_fixed_spray_only(
+                converted_items = update_already_converted_sources(
                     source_parts,
-                    float(fixed_spray_amount),
+                    route,
+                    spray_delta=float(spray_delta),
+                    fixed_spray_amount=float(fixed_spray_amount) if fixed_spray_amount is not None else None,
+                    color_brightness=float(color_brightness) if color_brightness is not None else None,
+                    y_offset_absolute=float(y_offset_absolute) if y_offset_absolute is not None else None,
+                    custom_separations=selected_custom_separations,
+                    custom_white_settings=selected_custom_white_settings,
+                    batch_mapping_overrides=batch_mapping_overrides,
                 )
-                report = build_spray_only_report(converted_items, float(fixed_spray_amount))
+                report = build_already_converted_report(
+                    preview,
+                    converted_items,
+                    route=route,
+                    fixed_spray_amount=float(fixed_spray_amount) if fixed_spray_amount is not None else None,
+                    spray_delta=float(spray_delta),
+                    color_brightness=float(color_brightness) if color_brightness is not None else None,
+                    y_offset_absolute=float(y_offset_absolute) if y_offset_absolute is not None else None,
+                )
             else:
                 if direction_value is None:
                     preview = build_preview_fn(source_parts, resolved_template_name, template_bytes)
@@ -4928,6 +5113,7 @@ def render_conversion_workspace(
                     y_offset_absolute=float(y_offset_absolute) if y_offset_absolute is not None else None,
                     spray_delta=float(spray_delta),
                     fixed_spray_amount=float(fixed_spray_amount) if fixed_spray_amount is not None else None,
+                    color_brightness=float(color_brightness) if color_brightness is not None else None,
                 )
                 if direction_value is not None:
                     convert_kwargs["direction"] = direction_value
@@ -4972,10 +5158,15 @@ def render_conversion_workspace(
 
     zip_bytes = st.session_state.get(zip_bytes_key)
     if zip_bytes:
+        effective_download_file_name = (
+            "already-converted-ksf-updated.zip"
+            if already_converted_mode
+            else download_file_name
+        )
         st.download_button(
-            f"Download {download_file_name}",
+            f"Download {effective_download_file_name}",
             data=zip_bytes,
-            file_name=download_file_name,
+            file_name=effective_download_file_name,
             mime="application/zip",
             use_container_width=True,
             key=f"{session_prefix}_download",
