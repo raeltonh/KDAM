@@ -16,6 +16,7 @@ from datetime import datetime
 from functools import lru_cache
 
 import streamlit as st
+import pandas as pd
 from collections import OrderedDict
 # openpyxl is imported lazily inside load_mapping_rows() so the app can run without it
 
@@ -2899,6 +2900,12 @@ def build_converted_root_cross(
         if direction == "avalanche1000_to_plus":
             apply_avalanche1000_pallet_mapping(source_root, target_root)
     elif expected_target_family == "matrix":
+        if matrix_pallet_mode == MATRIX_PALLET_MODE_RSS:
+            # Select RSS size from the job pallet rather than the setup default.
+            source_pallet = get_text(source_root, "TableName")
+            rss_pallet = MATRIX_RSS_PALLET_MAP.get(source_pallet)
+            if rss_pallet:
+                replace_simple_text(target_root, "TableName", rss_pallet)
         apply_matrix_pallet_mode(target_root, template_root, matrix_pallet_mode)
         apply_special_separation_mode(
             source_root,
@@ -3638,6 +3645,14 @@ def batch_target_options(preview: dict, table_rows: list[dict[str, Any]]) -> dic
     input_rgb_values = [row.target_input_rgb for row in compatible_rows]
     input_cmyk_values = [row.target_input_cmyk for row in compatible_rows]
     pallet_values = [row.target_pallet for row in compatible_rows]
+    if target_family == "matrix":
+        # Setup mappings describe setup defaults, not every supported RSS pallet.
+        pallet_values.extend(MATRIX_RSS_PALLET_MAP.keys())
+        pallet_values.extend(MATRIX_RSS_PALLET_MAP.values())
+        pallet_values.extend(
+            row.target_pallet for row in load_pallet_mapping_rows()
+            if normalize_lookup(row.target_machine) == normalize_lookup(machine_label_for_family(target_family))
+        )
 
     global_output_values: list[str] = []
     global_input_rgb_values: list[str] = []
@@ -3668,7 +3683,9 @@ def batch_target_options(preview: dict, table_rows: list[dict[str, Any]]) -> dic
     }
 
 
-def build_spray_rule_rows(table_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_spray_rule_rows(
+    table_rows: list[dict[str, Any]], preserve_source: bool = False
+) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
     for row in table_rows:
         default_setup = clean_editor_text(row.get("Default setup"))
@@ -3677,7 +3694,7 @@ def build_spray_rule_rows(table_rows: list[dict[str, Any]]) -> list[dict[str, An
         key = normalize_lookup(default_setup)
         default_spray = clean_editor_text(row.get("Default spray"))
         if key not in grouped:
-            spray_mode = SPRAY_MODE_SUGGESTED if default_spray else SPRAY_MODE_SOURCE
+            spray_mode = SPRAY_MODE_SUGGESTED if default_spray and not preserve_source else SPRAY_MODE_SOURCE
             grouped[key] = {
                 "Rule key": key,
                 "Files": 0,
@@ -3689,9 +3706,16 @@ def build_spray_rule_rows(table_rows: list[dict[str, Any]]) -> list[dict[str, An
         grouped[key]["Files"] += int(row.get("Files") or 0)
         if default_spray and not grouped[key].get("Suggested spray"):
             grouped[key]["Suggested spray"] = default_spray
-            grouped[key]["Spray mode"] = SPRAY_MODE_SUGGESTED
+            if not preserve_source:
+                grouped[key]["Spray mode"] = SPRAY_MODE_SUGGESTED
 
     return sorted(grouped.values(), key=lambda row: normalize_lookup(str(row["Default setup"])))
+
+
+def spray_rule_editor_data(rows: list[dict[str, Any]]) -> pd.DataFrame:
+    data = pd.DataFrame(rows)
+    data["Custom spray"] = pd.to_numeric(data["Custom spray"], errors="coerce").astype("float64")
+    return data
 
 
 def build_spray_rules(rows: list[dict[str, Any]]) -> dict[str, str]:
@@ -3836,7 +3860,9 @@ def render_batch_mapping_editor(preview: dict, session_prefix: str) -> tuple[dic
         else:
             st.caption("Standard Plus pallets will use the default recommended Poly pallet name.")
 
-    spray_rule_rows = build_spray_rule_rows(table_rows)
+    spray_rule_rows = build_spray_rule_rows(
+        table_rows, preserve_source=target_family_for_preview(preview) == "matrix"
+    )
     spray_rules: dict[str, str] = {}
     if spray_rule_rows:
         st.subheader("Spray rules")
@@ -3848,9 +3874,12 @@ def render_batch_mapping_editor(preview: dict, session_prefix: str) -> tuple[dic
             "To keep the value from each original KSF, change `Spray mode` to `Use source SprayAmount`. "
             "`Suggested spray` is only a reference, and `Custom spray` is used only with `Custom value`."
         )
+        # An all-None column is inferred as text by the editor. Explicit numeric
+        # dtype keeps the initially empty Custom spray column editable as numbers.
+        spray_editor_data = spray_rule_editor_data(spray_rule_rows)
         spray_editor_rows = st.data_editor(
-            spray_rule_rows,
-            key=f"{session_prefix}_spray_rules_editor_v1",
+            spray_editor_data,
+            key=f"{session_prefix}_spray_rules_editor_v2",
             hide_index=True,
             use_container_width=True,
             disabled=[
@@ -4707,13 +4736,13 @@ def render_conversion_workspace(
             index=0,
             help=(
                 "Use setup default pallet keeps the pallet assigned to the selected Matrix setup. "
-                "Convert supported pallets to RSS changes supported legacy names such as Standard pallet to RSS names. "
+                "Convert supported pallets to RSS uses the source job pallet to choose the matching RSS size. "
                 "Keep Matrix template pallet restores the pallet from the selected Matrix template."
             ),
             key=f"{session_prefix}_matrix_pallet_mode",
         )
         if selected_matrix_pallet_mode == MATRIX_PALLET_MODE_RSS:
-            st.caption("Known legacy pallet names will be converted to RSS names in the Matrix output.")
+            st.caption("Supported source job pallets will be converted to their matching RSS sizes in the Matrix output.")
         elif selected_matrix_pallet_mode == MATRIX_PALLET_MODE_TEMPLATE:
             st.caption("Output KSF files will keep the TableName from the Matrix template.")
         else:
