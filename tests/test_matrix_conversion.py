@@ -7,6 +7,30 @@ from streamlit.testing.v1 import AppTest
 
 
 class MatrixConversionTests(unittest.TestCase):
+    def test_custom_spray_reaches_both_fields_in_generated_files(self):
+        for value in (0, 20, 40):
+            for use_custom in (False, True):
+                with self.subTest(value=value, use_custom=use_custom):
+                    source = app.SourceItem(
+                        relative_path=app.Path('customer.ksf'),
+                        data=(app.APP_ROOT / 'templates/approved_matrix_template.ksf').read_bytes(),
+                        origin='test',
+                    )
+                    preview = app.build_already_converted_preview([source], 'plus_to_matrix')
+                    rows = app.build_batch_mapping_table(preview)
+                    rows[0]['Use custom'] = use_custom
+                    rules = app.build_spray_rule_rows(rows, preserve_source=True)
+                    rules[0].update({'Spray mode': app.SPRAY_MODE_CUSTOM, 'Custom spray': value})
+                    overrides = app.build_batch_mapping_overrides(rows, app.build_spray_rules(rules))
+                    results = app.update_already_converted_sources(
+                        [source], 'plus_to_matrix', batch_mapping_overrides=overrides,
+                    )
+                    self.assertEqual(results[0].status, 'converted', results[0].error)
+                    output = ET.fromstring(results[0].data)
+                    for tag in ('SprayAmount', 'LinearSprayAmount'):
+                        self.assertEqual(float(app.get_text(output, tag)), value)
+                    self.assertEqual(output.find('./SprayAndWipeItemsList/SprayAndWipeItem/SprayAmount').text, '0')
+
     def test_numeric_editor_and_spray_rules(self):
         rows = [{'Default setup': 'Dark cotton', 'Default spray': '65', 'Files': 1}]
         rules = app.build_spray_rule_rows(rows, preserve_source=True)
@@ -31,6 +55,22 @@ st.data_editor(spray_rule_editor_data(rows), column_config={"Custom spray":st.co
             options = app.batch_target_options({'direction': 'plus_to_matrix'}, [])['pallet']
         for size in set(app.MATRIX_RSS_PALLET_MAP.values()):
             self.assertIn(size, options)
+
+    def test_plus_to_matrix_custom_spray_updates_linear_amount(self):
+        source = ET.parse(app.APP_ROOT / 'templates/approved_atlas_max_template.ksf').getroot()
+        template = ET.parse(app.APP_ROOT / 'templates/approved_matrix_template.ksf')
+        app.replace_simple_text(source, 'LinearSprayAmount', '45')
+        key = app.batch_override_key_from_source(source, 'plus_to_matrix')
+        for value in ('40', '20'):
+            with self.subTest(value=value), patch.object(app, 'find_mapping_row', return_value=None), patch.object(app, 'apply_pallet_output_format'):
+                output = app.build_converted_root_cross(
+                    source, template, 'plus_to_matrix', 'source', 'source', 'source-file',
+                    'customer', 0, 0, None, 0,
+                    batch_mapping_overrides={key: {'target_spray_amount': value}},
+                )
+                serialized = ET.fromstring(app.serialize_xml(output))
+                self.assertEqual(serialized.findtext('SprayAmount'), value)
+                self.assertEqual(serialized.findtext('LinearSprayAmount'), value)
 
     def test_rss_conversion_uses_source_size_and_preserves_spray(self):
         source = ET.parse(app.APP_ROOT / 'templates/approved_atlas_max_template.ksf').getroot()

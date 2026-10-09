@@ -2455,6 +2455,7 @@ def apply_batch_spray_override(target_root: ET.Element, override: dict[str, str]
     target_spray_amount = str(override.get("target_spray_amount") or "").strip()
     if target_spray_amount:
         replace_simple_text(target_root, "SprayAmount", target_spray_amount)
+        replace_simple_text(target_root, "LinearSprayAmount", target_spray_amount)
 
 
 def build_converted_root(
@@ -3900,7 +3901,7 @@ def render_batch_mapping_editor(preview: dict, session_prefix: str) -> tuple[dic
                 ),
                 "Custom spray": st.column_config.NumberColumn(
                     "Custom spray",
-                    help="Used only when Spray mode is Custom value.",
+                    help="Used only when Spray mode is Custom value. Sets both SprayAmount and LinearSprayAmount.",
                     min_value=0.0,
                     step=1.0,
                     width="small",
